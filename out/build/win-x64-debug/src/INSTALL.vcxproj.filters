@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\Users\Mionumbra\Documents\VS\source\repos\ICompression\ICompression\out\build\win-x64-debug\CMakeFiles\306ef959d204808e0fb3d19dfe21f75e\INSTALL_force.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{7F8EB3BD-8AEC-3467-BD91-DFA52014A6C2}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

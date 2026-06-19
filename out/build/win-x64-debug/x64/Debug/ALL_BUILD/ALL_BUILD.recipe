@@ -1,0 +1,32 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <ProjectOutputs>
+    <ProjectOutput>
+      <FullPath>D:\Users\Mionumbra\Documents\VS\source\repos\ICompression\ICompression\out\build\win-x64-debug\x64\Debug\ZERO_CHECK</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>D:\Users\Mionumbra\Documents\VS\source\repos\ICompression\ICompression\out\build\win-x64-debug\Debug\ICompression.dll</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>D:\Users\Mionumbra\Documents\VS\source\repos\ICompression\ICompression\out\build\win-x64-debug\_deps\libarchive-build\bin\Debug\archive.dll</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>D:\Users\Mionumbra\Documents\VS\source\repos\ICompression\ICompression\out\build\win-x64-debug\_deps\libarchive-build\bin\Debug\bsdtar.exe</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>D:\Users\Mionumbra\Documents\VS\source\repos\ICompression\ICompression\out\build\win-x64-debug\_deps\zlib-build\Debug\zlibd.dll</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>D:\Users\Mionumbra\Documents\VS\source\repos\ICompression\ICompression\out\build\win-x64-debug\_deps\zlib-build\Debug\example.exe</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>D:\Users\Mionumbra\Documents\VS\source\repos\ICompression\ICompression\out\build\win-x64-debug\_deps\zlib-build\Debug\minigzip.exe</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>D:\Users\Mionumbra\Documents\VS\source\repos\ICompression\ICompression\out\build\win-x64-debug\x64\Debug\ALL_BUILD</FullPath>
+    </ProjectOutput>
+  </ProjectOutputs>
+  <ContentFiles />
+  <SatelliteDlls />
+  <NonRecipeFileRefs />
+</Project>

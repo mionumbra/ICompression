@@ -1,0 +1,78 @@
+{
+  "$schema": "./extgen.schema.json",
+  "input": "./spec.gmidl",
+  "root": "./",
+  "profile": "Full",
+  "gamemaker": {
+    "wrappers": {
+      "enabled": true,
+      "outputFile": "../scripts/ICompression_api/ICompression_api.gml"
+    },
+    "runtime": {
+      "enabled": true,
+      "outputFile": "../scripts/ICompression_runtime/ICompression_runtime.gml"
+    },
+    "yy": {
+      "enabled": true,
+      "outputFile": "./ICompression.yy",
+      "mode": "patch",
+      "extensionName": "ICompression",
+      "extensionFileName": "ICompression.yy",
+      "patchFrameworks": true
+    },
+    "injectors": {
+      "enabled": false
+    }
+  },
+  "targets": {
+    "windows": {
+      "enabled": true,
+      "outputFolder": "../"
+    },
+    "macos": {
+      "enabled": true,
+      "outputFolder": "../"
+    },
+    "linux": {
+      "enabled": true,
+      "outputFolder": "../"
+    },
+    "android": {
+      "enabled": true,
+      "mode": "jni",
+      "outputFolder": "../AndroidSource"
+    },
+    "ios": {
+      "enabled": true,
+      "mode": "native",
+      "sourceFolder": "./ios",
+      "sourceFilename": "{0}_ios",
+      "outputFolder": "../iOSSourceFromMac"
+    },
+    "tvos": {
+      "enabled": true,
+      "mode": "native",
+      "sourceFolder": "./tvos",
+      "sourceFilename": "{0}_tvos",
+      "outputFolder": "../tvOSSourceFromMac"
+    }
+  },
+  "build": {
+    "emitCmake": true,
+    "cmake": {
+      "cppStandard": 20,
+      "cppExtensions": false,
+      "strictWarnings": true,
+      "useThirdParty": true,
+      "emitPresets": true
+    }
+  },
+  "extras": {
+    "docs": {
+      "enabled": true,
+      "outputFolder": "./docs",
+      "outputFileName": "documentation.json",
+      "overwrite": true
+    }
+  }
+}

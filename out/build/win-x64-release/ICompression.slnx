@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Solution>
+	<Configurations>
+		<BuildType Name="Debug"/>
+		<BuildType Name="Release"/>
+		<BuildType Name="MinSizeRel"/>
+		<BuildType Name="RelWithDebInfo"/>
+		<Platform Name="x64"/>
+	</Configurations>
+	<Project Path="ALL_BUILD.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="9dd5e978-61d7-39a4-a7b4-13fc335ed9b7" DefaultStartup="true">
+		<BuildDependency Project="ICompression.vcxproj"/>
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="_deps/libarchive-build/libarchive/archive.vcxproj"/>
+		<BuildDependency Project="_deps/libarchive-build/libarchive/archive_static.vcxproj"/>
+		<BuildDependency Project="_deps/libarchive-build/tar/bsdtar.vcxproj"/>
+		<BuildDependency Project="_deps/zlib-build/example.vcxproj"/>
+		<BuildDependency Project="_deps/zlib-build/minigzip.vcxproj"/>
+		<BuildDependency Project="_deps/zlib-build/zlib.vcxproj"/>
+		<BuildDependency Project="_deps/zlib-build/zlibstatic.vcxproj"/>
+	</Project>
+	<Project Path="_deps/libarchive-build/Continuous.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="aa458a0c-1652-3691-8e19-b6e02baf7ae4">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<Build Solution="Debug|*" Project="false"/>
+		<Build Solution="Release|*" Project="false"/>
+		<Build Solution="MinSizeRel|*" Project="false"/>
+		<Build Solution="RelWithDebInfo|*" Project="false"/>
+	</Project>
+	<Project Path="_deps/libarchive-build/Experimental.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="c362f159-b9fe-37f8-9596-fe95b4262903">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<Build Solution="Debug|*" Project="false"/>
+		<Build Solution="Release|*" Project="false"/>
+		<Build Solution="MinSizeRel|*" Project="false"/>
+		<Build Solution="RelWithDebInfo|*" Project="false"/>
+	</Project>
+	<Project Path="ICompression.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="f4f74350-eceb-37ef-a7b5-d06000f3bebf">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="_deps/libarchive-build/libarchive/archive_static.vcxproj"/>
+		<BuildDependency Project="_deps/zlib-build/zlibstatic.vcxproj"/>
+	</Project>
+	<Project Path="INSTALL.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="98e06420-5d2e-31ac-8762-e364fa6e6ab1">
+		<BuildDependency Project="ALL_BUILD.vcxproj"/>
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<Build Solution="Debug|*" Project="false"/>
+		<Build Solution="Release|*" Project="false"/>
+		<Build Solution="MinSizeRel|*" Project="false"/>
+		<Build Solution="RelWithDebInfo|*" Project="false"/>
+	</Project>
+	<Project Path="_deps/libarchive-build/Nightly.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="3ecbbd78-21d8-3a3b-90bc-e78155f42c2e">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<Build Solution="Debug|*" Project="false"/>
+		<Build Solution="Release|*" Project="false"/>
+		<Build Solution="MinSizeRel|*" Project="false"/>
+		<Build Solution="RelWithDebInfo|*" Project="false"/>
+	</Project>
+	<Project Path="_deps/libarchive-build/NightlyMemoryCheck.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="34801f66-cc21-360d-a5f7-8186aa05c976">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<Build Solution="Debug|*" Project="false"/>
+		<Build Solution="Release|*" Project="false"/>
+		<Build Solution="MinSizeRel|*" Project="false"/>
+		<Build Solution="RelWithDebInfo|*" Project="false"/>
+	</Project>
+	<Project Path="ZERO_CHECK.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="6ba72a8d-efc9-31da-85d4-29a54264a6d0"/>
+	<Project Path="_deps/libarchive-build/libarchive/archive.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="b237b27a-2c9e-3e2f-8a90-c2d3b5b8d608">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="_deps/zlib-build/zlibstatic.vcxproj"/>
+	</Project>
+	<Project Path="_deps/libarchive-build/libarchive/archive_static.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="956bc570-c688-38c4-a043-15f08d46a1a2">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="_deps/zlib-build/zlibstatic.vcxproj"/>
+	</Project>
+	<Project Path="_deps/libarchive-build/tar/bsdtar.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="aa465151-143b-3bcf-ab99-05c26957dcc1">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="_deps/libarchive-build/libarchive/archive_static.vcxproj"/>
+		<BuildDependency Project="_deps/zlib-build/zlibstatic.vcxproj"/>
+	</Project>
+	<Project Path="_deps/zlib-build/example.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="58eb95de-d59d-3cf4-9a89-a60ab1facd68">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="_deps/zlib-build/zlib.vcxproj"/>
+	</Project>
+	<Project Path="_deps/zlib-build/minigzip.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="5ad280f4-113c-3c9c-a6c6-93646e6133f7">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="_deps/zlib-build/zlib.vcxproj"/>
+	</Project>
+	<Project Path="_deps/zlib-build/zlib.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="41485136-d47d-3618-86d4-2326cb47834f">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="_deps/zlib-build/zlibstatic.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="7b951b9e-dad0-3b33-ac9f-2dd953362609">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+</Solution>
