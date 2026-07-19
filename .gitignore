@@ -1,4 +1,2 @@
+cmake/
 out/
-
-# REQUIRED for console targets with extra configs
-CMakeUserPresets.json
