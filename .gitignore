@@ -1,7 +1,4 @@
-cmake/
-code_gen/
 out/
-templates/
-CMakeLists.txt/
-CMakePresets.json/
-docs
+
+# REQUIRED for console targets with extra configs
+CMakeUserPresets.json
