@@ -1,0 +1,13 @@
+{
+  "$GMScript":"v1",
+  "%Name":"ICompression_api",
+  "isCompatibility":false,
+  "isDnD":false,
+  "name":"ICompression_api",
+  "parent":{
+    "name":"ICompression",
+    "path":"folders/Extensions/ICompression.yy",
+  },
+  "resourceType":"GMScript",
+  "resourceVersion":"2.0",
+}
