@@ -488,16 +488,12 @@ function ic_decompress_buf(_input, _output, _format)
  * @param {String} _archive
  * @returns {Any} 
  */
-function ic_list(_archive)
-{
-    var __ret_buffer = __ext_core_get_ret_buffer();
-
-    var _return_value = __ic_list(_archive, buffer_get_address(__ret_buffer), buffer_get_size(__ret_buffer));
-
-    var _result = undefined;
-    _result = __ext_core_buffer_unmarshal_value(__ret_buffer, __decoders);
-    return _result;
-}
+function ic_list(_archive) {
+	static __decoders = (__ICompression_get_decoders()); // TODO: ？神秘YYG生成的代码用了__decoders却不加。
+    var __ret_buffer = (__ext_core_get_ret_buffer());
+    __ic_list(_archive, (buffer_get_address(__ret_buffer)), (buffer_get_size(__ret_buffer)));
+    return(__ext_core_buffer_unmarshal_value(__ret_buffer, __decoders));
+};
 
 /**
  * @param {String} _archive
