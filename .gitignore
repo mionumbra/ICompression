@@ -1,2 +1,26 @@
-cmake/
+# extgen 自动生成的文件
+extgen.schema.json
+CMakeLists.txt
+CMakePresets.json
+code_gen/
+
+# 自动生成的 GML
+project/scripts/ICompression_api/ICompression_api.gml
+project/scripts/GMExtCore/GMExtCore.gml
+
+# 注入器输出目录
+project/extensions/ICompression/injectors
+
+# 构建产物
+build/
 out/
+*.o
+*.obj
+*.dll
+*.so
+*.dylib
+*.exe
+*.lib
+*.exp
+*.ilk
+*.pdb
