@@ -11,3 +11,10 @@ CTestTestfile.cmake
 _deps
 CMakeUserPresets.json
 GM-ExtensionGenerator.wiki/
+ICompression/out/
+codex-out/
+
+out/
+
+# REQUIRED for console targets with extra configs
+CMakeUserPresets.json

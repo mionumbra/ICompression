@@ -1,0 +1,13 @@
+{
+  "$GMScript":"v1",
+  "%Name":"ICompression_test",
+  "isCompatibility":false,
+  "isDnD":false,
+  "name":"ICompression_test",
+  "parent":{
+    "name":"ICompression",
+    "path":"ICompression.yyp",
+  },
+  "resourceType":"GMScript",
+  "resourceVersion":"2.0",
+}
