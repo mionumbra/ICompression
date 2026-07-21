@@ -118,6 +118,26 @@
         },
         {
           "$GMExtensionFunction": "",
+          "%Name": "__ic_compress_buf_range",
+          "argCount": 4,
+          "args": [
+            1,
+            2,
+            1,
+            2
+          ],
+          "documentation": "@param {Pointer} _arg_buffer\r\n@param {Real} _arg_buffer_length\r\n@param {Pointer} _ret_buffer\r\n@param {Real} _ret_buffer_length\r\n@returns {Real}",
+          "externalName": "__EXT_NATIVE__ic_compress_buf_range",
+          "help": "",
+          "hidden": true,
+          "kind": 4,
+          "name": "__ic_compress_buf_range",
+          "resourceType": "GMExtensionFunction",
+          "resourceVersion": "2.0",
+          "returnType": 2
+        },
+        {
+          "$GMExtensionFunction": "",
           "%Name": "__ic_decompress_buf",
           "argCount": 4,
           "args": [
@@ -132,6 +152,26 @@
           "hidden": true,
           "kind": 4,
           "name": "__ic_decompress_buf",
+          "resourceType": "GMExtensionFunction",
+          "resourceVersion": "2.0",
+          "returnType": 2
+        },
+        {
+          "$GMExtensionFunction": "",
+          "%Name": "__ic_decompress_buf_range",
+          "argCount": 4,
+          "args": [
+            1,
+            2,
+            1,
+            2
+          ],
+          "documentation": "@param {Pointer} _arg_buffer\r\n@param {Real} _arg_buffer_length\r\n@param {Pointer} _ret_buffer\r\n@param {Real} _ret_buffer_length\r\n@returns {Real}",
+          "externalName": "__EXT_NATIVE__ic_decompress_buf_range",
+          "help": "",
+          "hidden": true,
+          "kind": 4,
+          "name": "__ic_decompress_buf_range",
           "resourceType": "GMExtensionFunction",
           "resourceVersion": "2.0",
           "returnType": 2
@@ -214,6 +254,26 @@
         },
         {
           "$GMExtensionFunction": "",
+          "%Name": "__ic_extract_buf",
+          "argCount": 4,
+          "args": [
+            1,
+            2,
+            1,
+            2
+          ],
+          "documentation": "@param {Pointer} _arg_buffer\r\n@param {Real} _arg_buffer_length\r\n@param {Pointer} _ret_buffer\r\n@param {Real} _ret_buffer_length\r\n@returns {Real}",
+          "externalName": "__EXT_NATIVE__ic_extract_buf",
+          "help": "",
+          "hidden": true,
+          "kind": 4,
+          "name": "__ic_extract_buf",
+          "resourceType": "GMExtensionFunction",
+          "resourceVersion": "2.0",
+          "returnType": 2
+        },
+        {
+          "$GMExtensionFunction": "",
           "%Name": "__ic_create",
           "argCount": 2,
           "args": [
@@ -264,6 +324,24 @@
           "hidden": false,
           "kind": 4,
           "name": "ic_add_data",
+          "resourceType": "GMExtensionFunction",
+          "resourceVersion": "2.0",
+          "returnType": 2
+        },
+        {
+          "$GMExtensionFunction": "",
+          "%Name": "__ic_add_buf",
+          "argCount": 2,
+          "args": [
+            1,
+            2
+          ],
+          "documentation": "@param {Pointer} _arg_buffer\r\n@param {Real} _arg_buffer_length\r\n@returns {Real}",
+          "externalName": "__EXT_NATIVE__ic_add_buf",
+          "help": "",
+          "hidden": true,
+          "kind": 4,
+          "name": "__ic_add_buf",
           "resourceType": "GMExtensionFunction",
           "resourceVersion": "2.0",
           "returnType": 2

@@ -273,6 +273,143 @@ function test_buffer_compress_decompress()
 }
 
 // =============================================================================
+// TEST: Binary buffer APIs, offsets, lengths, and required capacity
+// =============================================================================
+
+function test_binary_buffer_apis()
+{
+    show_debug_message("--- test_binary_buffer_apis ---");
+
+    var _dir = __test_temp_dir();
+    directory_create(_dir);
+    var _archive_path = _dir + "/binary.zip";
+    var _source = buffer_create(12, buffer_fixed, 1);
+    var _expected = [0, 1, 2, 0, 254, 255, 65, 0];
+    for (var _i = 0; _i < array_length(_expected); _i++) {
+        buffer_poke(_source, _i + 2, buffer_u8, _expected[_i]);
+    }
+
+    var _compressed = buffer_create(256, buffer_fixed, 1);
+    var _compress_result = ic_compress_buf_range(_source, 2, array_length(_expected), _compressed, 5, CompressionFormat.Gzip, CompressionLevel.Default);
+    if (!_compress_result.success || _compress_result.bytes_written <= 0) {
+        show_debug_message($"[FAIL] compress_buf_range: {_compress_result.error_message}");
+        buffer_delete(_source);
+        buffer_delete(_compressed);
+        __test_cleanup_dir(_dir);
+        return false;
+    }
+
+    var _roundtrip = buffer_create(16, buffer_fixed, 1);
+    var _decompress_result = ic_decompress_buf_range(_compressed, 5, _compress_result.bytes_written, _roundtrip, 4, CompressionFormat.Gzip);
+    if (!_decompress_result.success || _decompress_result.bytes_written != array_length(_expected)) {
+        show_debug_message($"[FAIL] decompress_buf_range: {_decompress_result.error_message}");
+        buffer_delete(_source);
+        buffer_delete(_compressed);
+        buffer_delete(_roundtrip);
+        __test_cleanup_dir(_dir);
+        return false;
+    }
+    for (var _i = 0; _i < array_length(_expected); _i++) {
+        if (buffer_peek(_roundtrip, _i + 4, buffer_u8) != _expected[_i]) {
+            show_debug_message($"[FAIL] ranged buffer mismatch at {_i}");
+            buffer_delete(_source);
+            buffer_delete(_compressed);
+            buffer_delete(_roundtrip);
+            __test_cleanup_dir(_dir);
+            return false;
+        }
+    }
+
+    var _empty_source = buffer_create(0, buffer_fixed, 1);
+    var _empty_compressed = buffer_create(128, buffer_fixed, 1);
+    var _empty_output = buffer_create(0, buffer_fixed, 1);
+    var _empty_compress_result = ic_compress_buf_range(_empty_source, 0, 0, _empty_compressed, 0, CompressionFormat.Gzip, CompressionLevel.Default);
+    var _empty_decompress_result = ic_decompress_buf_range(_empty_compressed, 0, _empty_compress_result.bytes_written, _empty_output, 0, CompressionFormat.Gzip);
+    if (!_empty_compress_result.success || !_empty_decompress_result.success || _empty_decompress_result.bytes_written != 0) {
+        show_debug_message($"[FAIL] empty ranged buffer round-trip: compress={_empty_compress_result.success}/{_empty_compress_result.bytes_written}/{_empty_compress_result.error_message}, decompress={_empty_decompress_result.success}/{_empty_decompress_result.bytes_written}/{_empty_decompress_result.error_message}");
+        buffer_delete(_source);
+        buffer_delete(_compressed);
+        buffer_delete(_roundtrip);
+        buffer_delete(_empty_source);
+        buffer_delete(_empty_compressed);
+        buffer_delete(_empty_output);
+        __test_cleanup_dir(_dir);
+        return false;
+    }
+    buffer_delete(_empty_source);
+    buffer_delete(_empty_compressed);
+    buffer_delete(_empty_output);
+
+    var _handle = ic_create(_archive_path, CompressionFormat.Zip);
+    if (_handle < 0 || !ic_add_buf(_handle, "binary.dat", _source, 2, array_length(_expected)) || !ic_close(_handle)) {
+        show_debug_message("[FAIL] add_buf with range");
+        buffer_delete(_source);
+        buffer_delete(_compressed);
+        buffer_delete(_roundtrip);
+        __test_cleanup_dir(_dir);
+        return false;
+    }
+
+    var _small = buffer_create(4, buffer_fixed, 1);
+    var _small_result = ic_extract_buf(_archive_path, "binary.dat", _small, 0);
+    if (_small_result.success || _small_result.bytes_required != array_length(_expected)) {
+        show_debug_message("[FAIL] extract_buf required capacity");
+        buffer_delete(_source);
+        buffer_delete(_compressed);
+        buffer_delete(_roundtrip);
+        buffer_delete(_small);
+        __test_cleanup_dir(_dir);
+        return false;
+    }
+
+    var _output = buffer_create(12, buffer_fixed, 1);
+    var _extract_result = ic_extract_buf(_archive_path, "binary.dat", _output, 3);
+    if (!_extract_result.success || _extract_result.bytes_written != array_length(_expected)) {
+        show_debug_message($"[FAIL] extract_buf: {_extract_result.error_message}");
+        buffer_delete(_source);
+        buffer_delete(_compressed);
+        buffer_delete(_roundtrip);
+        buffer_delete(_small);
+        buffer_delete(_output);
+        __test_cleanup_dir(_dir);
+        return false;
+    }
+    for (var _i = 0; _i < array_length(_expected); _i++) {
+        if (buffer_peek(_output, _i + 3, buffer_u8) != _expected[_i]) {
+            show_debug_message($"[FAIL] binary buffer mismatch at {_i}");
+            buffer_delete(_source);
+            buffer_delete(_compressed);
+            buffer_delete(_roundtrip);
+            buffer_delete(_small);
+            buffer_delete(_output);
+            __test_cleanup_dir(_dir);
+            return false;
+        }
+    }
+
+    if (ic_add_buf(-1, "bad", _source, -1, 1)) {
+        show_debug_message("[FAIL] add_buf accepted invalid range");
+        buffer_delete(_source);
+        buffer_delete(_compressed);
+        buffer_delete(_roundtrip);
+        buffer_delete(_small);
+        buffer_delete(_output);
+        __test_cleanup_dir(_dir);
+        return false;
+    }
+
+    buffer_delete(_source);
+    buffer_delete(_compressed);
+    buffer_delete(_roundtrip);
+    buffer_delete(_small);
+    buffer_delete(_output);
+    file_delete(_archive_path);
+    directory_destroy(_dir);
+    show_debug_message("[OK] test_binary_buffer_apis");
+    return true;
+}
+
+// =============================================================================
 // TEST: ic_create -> ic_add_data -> ic_close -> ic_list -> ic_extract_mem
 // =============================================================================
 
@@ -648,6 +785,7 @@ function run_all_tests()
         test_from_ext,
         test_stream_compress_decompress,
         test_buffer_compress_decompress,
+        test_binary_buffer_apis,
         test_file_compress_decompress,
         test_archive_create_list_extract,
         test_extract_all,

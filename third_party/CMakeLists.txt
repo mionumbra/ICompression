@@ -5,6 +5,7 @@ cmake_minimum_required(VERSION 3.18)
 # =============================================================================
 
 include(FetchContent)
+enable_language(C)
 
 set(ZLIB_VERSION "1.3.2")
 set(BZIP2_VERSION "1.0.8")
@@ -15,6 +16,9 @@ set(LIBARCHIVE_VERSION "3.8.8")
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(CMAKE_POLICY_VERSION_MINIMUM "3.5" CACHE STRING "" FORCE)
+set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(ZLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(ZLIB_INSTALL OFF CACHE BOOL "" FORCE)
 
 # -----------------------------------------------------------------------------
 # zlib (ZIP deflate + gzip)
@@ -66,10 +70,6 @@ if(MSVC)
     set(_IC_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
   endif()
   set_property(TARGET bz2_static PROPERTY MSVC_RUNTIME_LIBRARY "${_IC_MSVC_RUNTIME_LIBRARY}")
-  target_compile_options(bz2_static PRIVATE
-    "$<$<CONFIG:Debug>:/MDd>"
-    "$<$<NOT:$<CONFIG:Debug>>:/MD>"
-  )
 endif()
 
 set(BZIP2_INCLUDE_DIR "${bzip2_SOURCE_DIR}" CACHE PATH "bzip2 include" FORCE)
@@ -185,7 +185,7 @@ set(ENABLE_LZ4 ON CACHE BOOL "" FORCE)
 set(ENABLE_ZSTD ON CACHE BOOL "" FORCE)
 set(ENABLE_LZMA ON CACHE BOOL "" FORCE)
 set(ENABLE_CAT OFF CACHE BOOL "" FORCE)
-set(ENABLE_TAR ON CACHE BOOL "" FORCE)
+set(ENABLE_TAR OFF CACHE BOOL "" FORCE)
 set(ENABLE_CPIO OFF CACHE BOOL "" FORCE)
 set(ENABLE_PCREPOSIX OFF CACHE BOOL "" FORCE)
 set(ENABLE_PCRE2POSIX OFF CACHE BOOL "" FORCE)
@@ -197,7 +197,7 @@ set(ENABLE_LIBB2 OFF CACHE BOOL "" FORCE)
 set(ENABLE_LZO OFF CACHE BOOL "" FORCE)
 set(ENABLE_MBEDTLS OFF CACHE BOOL "" FORCE)
 set(ENABLE_NETTLE OFF CACHE BOOL "" FORCE)
-set(ENABLE_CNG ON CACHE BOOL "" FORCE)
+set(ENABLE_CNG OFF CACHE BOOL "" FORCE)
 set(ENABLE_WERROR OFF CACHE BOOL "" FORCE)
 set(ENABLE_TEST OFF CACHE BOOL "" FORCE)
 set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)

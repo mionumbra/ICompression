@@ -6,13 +6,14 @@
 code_gen/
 project/extensions/ICompression/injectors
 project/extensions/ICompression/ICompression.dll
-project/scripts/ICompression_api/ICompression_api.gml
+project/scripts/ICompression_API/ICompression_API.gml
 project/scripts/GMExtCore/GMExtCore.gml
 cmake/
 build/
 out/
 templates/
 /docs
+docs/documentation.json
 *.o
 *.obj
 *.dll

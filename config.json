@@ -6,7 +6,7 @@
   "gamemaker": {
     "wrappers": {
       "enabled": true,
-      "outputFile": "./project/scripts/ICompression_api/ICompression_api.gml"
+      "outputFile": "./project/scripts/ICompression_API/ICompression_API.gml"
     },
     "extension": {
       "enabled": true,
@@ -34,8 +34,7 @@
   "extras": {
     "docs": {
       "enabled": true,
-      "outputFolder": "./docs",
-      "outputFileName": "documentation.json",
+      "outputFile": "./docs/documentation.json",
       "overwrite": true
     }
   },

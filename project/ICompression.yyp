@@ -31,7 +31,7 @@
     {"id":{"name":"Object","path":"objects/Object/Object.yy",},},
     {"id":{"name":"Room","path":"rooms/Room/Room.yy",},},
     {"id":{"name":"GMExtCore","path":"scripts/GMExtCore/GMExtCore.yy",},},
-    {"id":{"name":"ICompression_api","path":"scripts/ICompression_api/ICompression_api.yy",},},
+    {"id":{"name":"ICompression_API","path":"scripts/ICompression_API/ICompression_API.yy",},},
     {"id":{"name":"ICompression_test","path":"scripts/ICompression_test/ICompression_test.yy",},},
     {"id":{"name":"Script","path":"scripts/Script/Script.yy",},},
   ],

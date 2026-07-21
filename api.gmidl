@@ -83,6 +83,22 @@ class `[[CompressResult]]` prototype Object
     property ratio : float { get; set; }
 }
 
+[global]
+class `[[BufferResult]]` prototype Object
+{
+    [field]
+    property success : bool { get; set; }
+
+    [field]
+    property bytes_written : int64 { get; set; }
+
+    [field]
+    property bytes_required : int64 { get; set; }
+
+    [field]
+    property error_message : string { get; set; }
+}
+
 // ============================================================
 // Stream Compression / Decompression
 // (gzip, zstd, lz4, xz, deflate)
@@ -103,14 +119,20 @@ function ic_decompress_file(src : string, dst : string, [type_hint = `Compressio
 [global, bind = typed_gml, type_hint = `CompressResult`]
 function ic_compress_buf([type_hint = `buffer`] input : gmval, [type_hint = `buffer`] output : gmval, [type_hint = `CompressionFormat`] format : gmval, level : int32) : gmval;
 
+[global, bind = typed_gml, type_hint = `BufferResult`]
+function ic_compress_buf_range([type_hint = `buffer`] input : gmval, input_offset : int64, input_length : int64, [type_hint = `buffer`] output : gmval, output_offset : int64, [type_hint = `CompressionFormat`] format : gmval, level : int32) : gmval;
+
 [global, bind = typed_gml, type_hint = `CompressResult`]
 function ic_decompress_buf([type_hint = `buffer`] input : gmval, [type_hint = `buffer`] output : gmval, [type_hint = `CompressionFormat`] format : gmval) : gmval;
+
+[global, bind = typed_gml, type_hint = `BufferResult`]
+function ic_decompress_buf_range([type_hint = `buffer`] input : gmval, input_offset : int64, input_length : int64, [type_hint = `buffer`] output : gmval, output_offset : int64, [type_hint = `CompressionFormat`] format : gmval) : gmval;
 
 // ============================================================
 // Archive Operations (zip, 7z, tar)
 // ============================================================
 
-[global, bind = typed_gml]
+[global, bind = typed_gml, type_hint = `ArchiveEntry[]`]
 function ic_list(archive : string) : gmval;
 
 [global, bind = typed_gml, type_hint = `ExtractResult`]
@@ -122,6 +144,9 @@ function ic_extract_file(archive : string, entry : string, output : string) : bo
 [global, bind = typed_gml]
 function ic_extract_mem(archive : string, entry : string) : string;
 
+[global, bind = typed_gml, type_hint = `BufferResult`]
+function ic_extract_buf(archive : string, entry : string, [type_hint = `buffer`] output : gmval, output_offset : int64) : gmval;
+
 [global, bind = typed_gml]
 function ic_create(archive : string, [type_hint = `CompressionFormat`] format : gmval) : int32;
 
@@ -130,6 +155,9 @@ function ic_add_file(handle : int32, path : string, entry : string) : bool;
 
 [global, bind = typed_gml]
 function ic_add_data(handle : int32, entry : string, data : string) : bool;
+
+[global, bind = typed_gml]
+function ic_add_buf(handle : int32, entry : string, [type_hint = `buffer`] data : gmval, data_offset : int64, data_length : int64) : bool;
 
 [global, bind = typed_gml]
 function ic_close(handle : int32) : bool;
