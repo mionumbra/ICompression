@@ -7,6 +7,13 @@ cmake_minimum_required(VERSION 3.18)
 include(FetchContent)
 enable_language(C)
 
+if(POLICY CMP0169)
+  cmake_policy(SET CMP0169 OLD)
+endif()
+if(POLICY CMP0194)
+  cmake_policy(SET CMP0194 OLD)
+endif()
+
 set(ZLIB_VERSION "1.3.2")
 set(BZIP2_VERSION "1.0.8")
 set(ZSTD_VERSION "1.5.7")
@@ -26,7 +33,7 @@ set(ZLIB_INSTALL OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     zlib
     GIT_REPOSITORY https://github.com/madler/zlib.git
-    GIT_TAG v${ZLIB_VERSION}
+    GIT_TAG 216c70c020aa53f0c40920d155f808b6b59c9acb
     GIT_SHALLOW TRUE
     GIT_PROGRESS TRUE
 )
@@ -42,7 +49,7 @@ set(ZLIB_FOUND TRUE CACHE BOOL "zlib found" FORCE)
 FetchContent_Declare(
     bzip2
     GIT_REPOSITORY https://sourceware.org/git/bzip2.git
-    GIT_TAG bzip2-${BZIP2_VERSION}
+    GIT_TAG 75a94bea3918e612b879d6a11ca64b8689526147
     GIT_SHALLOW TRUE
     GIT_PROGRESS TRUE
 )
@@ -92,7 +99,7 @@ set(ZSTD_LEGACY_SUPPORT OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     zstd
     GIT_REPOSITORY https://github.com/facebook/zstd.git
-    GIT_TAG v${ZSTD_VERSION}
+    GIT_TAG ac66b19e6bd6b83238bf008eecc1298105298532
     GIT_SHALLOW TRUE
     GIT_PROGRESS TRUE
 )
@@ -119,7 +126,7 @@ set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
 FetchContent_Declare(
     lz4
     GIT_REPOSITORY https://github.com/lz4/lz4.git
-    GIT_TAG v${LZ4_VERSION}
+    GIT_TAG ebb370ca83af193212df4dcbadcc5d87bc0de2f0
     GIT_SHALLOW TRUE
     GIT_PROGRESS TRUE
 )
@@ -153,7 +160,7 @@ set(XZ_TOOL_SYMLINKS_LZMA OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     xz
     GIT_REPOSITORY https://github.com/tukaani-project/xz.git
-    GIT_TAG v${XZ_VERSION}
+    GIT_TAG 9d0743bb9629e8a55ea7b1b40b981514a1f68408
     GIT_SHALLOW TRUE
     GIT_PROGRESS TRUE
 )
@@ -211,7 +218,7 @@ endif()
 FetchContent_Declare(
   libarchive
   GIT_REPOSITORY https://github.com/libarchive/libarchive.git
-  GIT_TAG v${LIBARCHIVE_VERSION}
+  GIT_TAG 24d992722659c529700143e3087dee6454addecd
   GIT_SHALLOW TRUE
   GIT_PROGRESS TRUE
 )

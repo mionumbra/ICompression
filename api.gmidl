@@ -99,6 +99,25 @@ class `[[BufferResult]]` prototype Object
     property error_message : string { get; set; }
 }
 
+[global]
+class `[[ListResult]]` prototype Object
+{
+    [field]
+    property success : bool { get; set; }
+
+    [field, type_hint = `ArchiveEntry[]`]
+    property entries : gmval { get; set; }
+
+    [field]
+    property next_offset : int32 { get; set; }
+
+    [field]
+    property has_more : bool { get; set; }
+
+    [field]
+    property error_message : string { get; set; }
+}
+
 // ============================================================
 // Stream Compression / Decompression
 // (gzip, zstd, lz4, xz, deflate)
@@ -135,6 +154,9 @@ function ic_decompress_buf_range([type_hint = `buffer`] input : gmval, input_off
 [global, bind = typed_gml, type_hint = `ArchiveEntry[]`]
 function ic_list(archive : string) : gmval;
 
+[global, bind = typed_gml, type_hint = `ListResult`]
+function ic_list_page(archive : string, offset : int32) : gmval;
+
 [global, bind = typed_gml, type_hint = `ExtractResult`]
 function ic_extract(archive : string, output_dir : string) : gmval;
 
@@ -161,6 +183,9 @@ function ic_add_buf(handle : int32, entry : string, [type_hint = `buffer`] data 
 
 [global, bind = typed_gml]
 function ic_close(handle : int32) : bool;
+
+[global, finish_fn]
+function ic_shutdown() : unit;
 
 // ============================================================
 // Utility

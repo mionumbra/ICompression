@@ -26,6 +26,9 @@ static constexpr size_t MAX_ENTRY_SIZE = 256ull * 1024ull * 1024ull;
 static constexpr uint64_t MAX_TOTAL_EXTRACT_SIZE = 1024ull * 1024ull * 1024ull;
 static constexpr size_t MAX_ARCHIVE_ENTRIES = 65535;
 static constexpr size_t MAX_ENTRY_PATH_SIZE = 4096;
+static constexpr size_t MAX_LIST_PATH_SIZE = 256;
+static constexpr size_t MAX_LIST_PAGE_ENTRIES = 16;
+static constexpr size_t MAX_OPEN_ARCHIVES = 64;
 
 // =============================================================================
 // Internal helpers
@@ -166,6 +169,12 @@ static std::string entry_pathname_utf8(struct archive_entry* entry)
 {
     const char* pathname = archive_entry_pathname_utf8(entry);
     return pathname ? pathname : "";
+}
+
+static const char* archive_error_or(struct archive* a, const char* fallback)
+{
+    const char* error = a ? archive_error_string(a) : nullptr;
+    return error ? error : fallback;
 }
 
 static bool get_buffer_range(GMBuffer buffer, int64_t offset, int64_t length,
@@ -815,47 +824,86 @@ BufferResult ic_decompress_buf_range(GMBuffer input, int64_t input_offset, int64
 
 std::vector<ArchiveEntry> ic_list(std::string_view archive)
 {
+    ListResult page = ic_list_page(archive, 0);
+    return page.success ? std::move(page.entries) : std::vector<ArchiveEntry>{};
+}
+
+ListResult ic_list_page(std::string_view archive, int32_t offset)
+{
+    ListResult result{};
+    result.next_offset = offset;
+    if (offset < 0)
+    {
+        result.error_message = "Offset must not be negative";
+        return result;
+    }
+
     struct archive* a = archive_read_new();
     if (!a)
-        return {};
+    {
+        result.error_message = "Failed to allocate libarchive reader";
+        return result;
+    }
     archive_read_support_filter_all(a);
     archive_read_support_format_all(a);
 
     if (OPEN_ARCHIVE_READ(a, archive, 10240) != ARCHIVE_OK)
     {
-        LOG_ERROR("ic_list: archive_read_open_filename failed: %s (path=%s)", archive_error_string(a), std::string(archive).c_str());
+        result.error_message = archive_error_or(a, "Failed to open archive");
+        LOG_ERROR("ic_list_page: %s (path=%s)", result.error_message.c_str(), std::string(archive).c_str());
         archive_read_free(a);
-        return {};
+        return result;
     }
 
-    std::vector<ArchiveEntry> entries;
     struct archive_entry* entry;
-    while (archive_read_next_header(a, &entry) == ARCHIVE_OK)
+    int header_status;
+    size_t scanned = 0;
+    while ((header_status = archive_read_next_header(a, &entry)) == ARCHIVE_OK)
     {
-        if (entries.size() >= MAX_ARCHIVE_ENTRIES)
+        if (scanned >= MAX_ARCHIVE_ENTRIES)
         {
-            LOG_ERROR("ic_list: archive contains too many entries");
+            result.error_message = "Archive contains too many entries";
             break;
         }
+        ++scanned;
+
+        if (scanned <= static_cast<size_t>(offset))
+        {
+            archive_read_data_skip(a);
+            continue;
+        }
+
         ArchiveEntry ae;
         ae.filename = archive_entry_pathname_utf8(entry) ? archive_entry_pathname_utf8(entry) : "";
-        if (ae.filename.size() > MAX_ENTRY_PATH_SIZE)
+        if (ae.filename.size() > MAX_LIST_PATH_SIZE)
         {
-            LOG_ERROR("ic_list: archive entry path is too long");
+            result.error_message = "Archive entry path is too long to list";
             break;
         }
-        ae.compressed_size = static_cast<int64_t>(archive_entry_size_is_set(entry) ? archive_entry_size(entry) : 0);
-        ae.uncompressed_size = ae.compressed_size;
+        ae.compressed_size = -1;
+        ae.uncompressed_size = static_cast<int64_t>(archive_entry_size_is_set(entry) ? archive_entry_size(entry) : -1);
         ae.is_directory = (archive_entry_filetype(entry) == AE_IFDIR);
         ae.crc32 = 0;
-        entries.push_back(std::move(ae));
+        result.entries.push_back(std::move(ae));
         archive_read_data_skip(a);
+
+        if (result.entries.size() >= MAX_LIST_PAGE_ENTRIES)
+        {
+            result.has_more = true;
+            result.next_offset = static_cast<int32_t>(scanned);
+            break;
+        }
     }
+
+    if (result.error_message.empty() && !result.has_more && header_status != ARCHIVE_EOF)
+        result.error_message = archive_error_or(a, "Failed to read archive header");
 
     archive_read_close(a);
     archive_read_free(a);
-
-    return entries;
+    result.success = result.error_message.empty();
+    if (result.success && !result.has_more)
+        result.next_offset = static_cast<int32_t>(scanned);
+    return result;
 }
 
 ExtractResult ic_extract(std::string_view archive, std::string_view output_dir)
@@ -897,7 +945,7 @@ ExtractResult ic_extract(std::string_view archive, std::string_view output_dir)
 
     if (OPEN_ARCHIVE_READ(a, archive, 10240) != ARCHIVE_OK)
     {
-        result.error_message = archive_error_string(a);
+        result.error_message = archive_error_or(a, "Failed to open archive");
         result.success = false;
         archive_read_free(a);
         archive_write_free(ext);
@@ -915,6 +963,8 @@ ExtractResult ic_extract(std::string_view archive, std::string_view output_dir)
         if (++entry_count > MAX_ARCHIVE_ENTRIES ||
             entry_path.size() > MAX_ENTRY_PATH_SIZE ||
             !is_safe_archive_entry_path(entry_path) ||
+            archive_entry_hardlink(entry) != nullptr ||
+            archive_entry_symlink(entry) != nullptr ||
             (filetype != AE_IFREG && filetype != AE_IFDIR))
         {
             archive_read_data_skip(a);
@@ -925,6 +975,22 @@ ExtractResult ic_extract(std::string_view archive, std::string_view output_dir)
             archive_write_close(ext);
             archive_write_free(ext);
             return result;
+        }
+
+        if (archive_entry_size_is_set(entry))
+        {
+            const la_int64_t declared_size = archive_entry_size(entry);
+            if (declared_size < 0 || static_cast<uint64_t>(declared_size) > MAX_ENTRY_SIZE ||
+                static_cast<uint64_t>(declared_size) > MAX_TOTAL_EXTRACT_SIZE - total_extracted)
+            {
+                result.error_message = "Archive entry exceeds the configured extraction limit";
+                result.success = false;
+                archive_read_close(a);
+                archive_read_free(a);
+                archive_write_close(ext);
+                archive_write_free(ext);
+                return result;
+            }
         }
 
         std::string outpath = std::string(output_dir) + "/" + entry_path;
@@ -956,7 +1022,7 @@ ExtractResult ic_extract(std::string_view archive, std::string_view output_dir)
                 auto wr = archive_write_data_block(ext, buff, size, offset);
                 if (wr < ARCHIVE_OK)
                 {
-                    result.error_message = archive_error_string(ext);
+                    result.error_message = archive_error_or(ext, "Failed to write archive data");
                     result.success = false;
                     archive_read_close(a);
                     archive_read_free(a);
@@ -982,7 +1048,7 @@ ExtractResult ic_extract(std::string_view archive, std::string_view output_dir)
         }
         else
         {
-            result.error_message = archive_error_string(ext);
+            result.error_message = archive_error_or(ext, "Failed to create extracted entry");
             result.success = false;
             archive_read_data_skip(a);
             archive_read_close(a);
@@ -1029,9 +1095,12 @@ bool ic_extract_file(std::string_view archive, std::string_view entry, std::stri
 
     bool found = false;
     struct archive_entry* ae;
+    size_t entry_count = 0;
     while (archive_read_next_header(a, &ae) == ARCHIVE_OK)
     {
         std::string pathname = entry_pathname_utf8(ae);
+        if (++entry_count > MAX_ARCHIVE_ENTRIES || pathname.size() > MAX_ENTRY_PATH_SIZE)
+            break;
         if (pathname == entry && archive_entry_filetype(ae) == AE_IFREG)
         {
             std::string data;
@@ -1077,9 +1146,15 @@ std::string ic_extract_mem(std::string_view archive, std::string_view entry)
 
     std::string result;
     struct archive_entry* ae;
+    size_t entry_count = 0;
     while (archive_read_next_header(a, &ae) == ARCHIVE_OK)
     {
         std::string pathname = entry_pathname_utf8(ae);
+        if (++entry_count > MAX_ARCHIVE_ENTRIES || pathname.size() > MAX_ENTRY_PATH_SIZE)
+        {
+            LOG_ERROR("ic_extract_mem: archive entry scan limit exceeded");
+            break;
+        }
         int filetype = archive_entry_filetype(ae);
         if (pathname != entry || filetype != AE_IFREG)
         {
@@ -1130,9 +1205,16 @@ BufferResult ic_extract_buf(std::string_view archive, std::string_view entry,
 
     struct archive_entry* archive_entry;
     bool found = false;
+    size_t entry_count = 0;
     while (archive_read_next_header(a, &archive_entry) == ARCHIVE_OK)
     {
-        if (entry_pathname_utf8(archive_entry) != entry || archive_entry_filetype(archive_entry) != AE_IFREG)
+        std::string pathname = entry_pathname_utf8(archive_entry);
+        if (++entry_count > MAX_ARCHIVE_ENTRIES || pathname.size() > MAX_ENTRY_PATH_SIZE)
+        {
+            result.error_message = "Archive entry scan limit exceeded";
+            break;
+        }
+        if (pathname != entry || archive_entry_filetype(archive_entry) != AE_IFREG)
         {
             archive_read_data_skip(a);
             continue;
@@ -1169,8 +1251,28 @@ BufferResult ic_extract_buf(std::string_view archive, std::string_view entry,
 static std::map<int32_t, struct archive*> g_archive_writers;
 static int32_t g_next_handle = 1;
 
+static int32_t allocate_archive_handle()
+{
+    for (size_t attempts = 0; attempts <= MAX_OPEN_ARCHIVES; ++attempts)
+    {
+        if (g_next_handle <= 0)
+            g_next_handle = 1;
+        const int32_t candidate = g_next_handle;
+        g_next_handle = (g_next_handle == std::numeric_limits<int32_t>::max()) ? 1 : g_next_handle + 1;
+        if (g_archive_writers.find(candidate) == g_archive_writers.end())
+            return candidate;
+    }
+    return -1;
+}
+
 int32_t ic_create(std::string_view archive, CompressionFormat format)
 {
+    if (g_archive_writers.size() >= MAX_OPEN_ARCHIVES)
+    {
+        LOG_ERROR("ic_create: maximum number of open archives reached");
+        return -1;
+    }
+
     struct archive* a = archive_write_new();
     if (!a)
     {
@@ -1192,7 +1294,13 @@ int32_t ic_create(std::string_view archive, CompressionFormat format)
         return -1;
     }
 
-    int32_t handle = g_next_handle++;
+    const int32_t handle = allocate_archive_handle();
+    if (handle < 0)
+    {
+        archive_write_close(a);
+        archive_write_free(a);
+        return -1;
+    }
     g_archive_writers[handle] = a;
     return handle;
 }
@@ -1288,6 +1396,17 @@ bool ic_close(int32_t handle)
     const int free_status = archive_write_free(a);
     g_archive_writers.erase(it);
     return close_status >= ARCHIVE_OK && free_status >= ARCHIVE_OK;
+}
+
+void ic_shutdown()
+{
+    for (auto& writer : g_archive_writers)
+    {
+        archive_write_close(writer.second);
+        archive_write_free(writer.second);
+    }
+    g_archive_writers.clear();
+    g_next_handle = 1;
 }
 
 // =============================================================================

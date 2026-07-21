@@ -23,7 +23,9 @@ set(EXT_PUBLIC_HEADERS_TVOS
 # User implementation sources per platform (editable template)
 # =============================================================================
 if(WIN32)
+  enable_language(RC)
   file(GLOB TARGET_SRCS CONFIGURE_DEPENDS "${SRC_DIR}/native/*.cpp")
+  list(APPEND TARGET_SRCS "${SRC_DIR}/native/ICompression_version.rc")
 
 elseif(APPLE)
   if(CMAKE_OSX_SYSROOT MATCHES "iphone")

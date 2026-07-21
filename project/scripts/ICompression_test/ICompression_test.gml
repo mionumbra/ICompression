@@ -765,6 +765,72 @@ function test_error_handling()
     return true;
 }
 
+function test_list_pagination()
+{
+    show_debug_message("--- test_list_pagination ---");
+    var _dir = __test_temp_dir();
+    directory_create(_dir);
+    var _archive_path = _dir + "/paged.zip";
+    var _handle = ic_create(_archive_path, CompressionFormat.Zip);
+    if (_handle < 0) { __test_cleanup_dir(_dir); return false; }
+
+    for (var _index = 0; _index < 40; ++_index) {
+        if (!ic_add_data(_handle, $"entry_{_index}.txt", "x")) {
+            ic_close(_handle);
+            __test_cleanup_dir(_dir);
+            return false;
+        }
+    }
+    if (!ic_close(_handle)) { __test_cleanup_dir(_dir); return false; }
+
+    var _offset = 0;
+    var _count = 0;
+    repeat (4) {
+        var _page = ic_list_page(_archive_path, _offset);
+        if (!_page.success) {
+            show_debug_message($"[FAIL] list page: {_page.error_message}");
+            __test_cleanup_dir(_dir);
+            return false;
+        }
+        _count += array_length(_page.entries);
+        if (!_page.has_more) break;
+        _offset = _page.next_offset;
+    }
+
+    file_delete(_archive_path);
+    directory_destroy(_dir);
+    if (_count != 40) { show_debug_message($"[FAIL] paged list count {_count}"); return false; }
+    show_debug_message("[OK] test_list_pagination");
+    return true;
+}
+
+function test_open_handle_limit()
+{
+    show_debug_message("--- test_open_handle_limit ---");
+    var _dir = __test_temp_dir();
+    directory_create(_dir);
+    var _handles = array_create(64, -1);
+    for (var _i = 0; _i < 64; ++_i) {
+        _handles[_i] = ic_create(_dir + $"/limit_{_i}.zip", CompressionFormat.Zip);
+        if (_handles[_i] < 0) {
+            for (var _j = 0; _j < _i; ++_j) ic_close(_handles[_j]);
+            __test_cleanup_dir(_dir);
+            return false;
+        }
+    }
+
+    var _extra = ic_create(_dir + "/limit_extra.zip", CompressionFormat.Zip);
+    for (var _i = 0; _i < 64; ++_i) {
+        ic_close(_handles[_i]);
+        file_delete(_dir + $"/limit_{_i}.zip");
+    }
+    if (_extra >= 0) ic_close(_extra);
+    directory_destroy(_dir);
+    if (_extra >= 0) { show_debug_message("[FAIL] open handle limit"); return false; }
+    show_debug_message("[OK] test_open_handle_limit");
+    return true;
+}
+
 // =============================================================================
 // Test runner
 // =============================================================================
@@ -798,6 +864,8 @@ function run_all_tests()
         test_detect_file,
         test_7z_archive,
         test_error_handling,
+        test_list_pagination,
+        test_open_handle_limit,
     ];
 
     for (var _i = 0; _i < array_length(_tests); _i++)
@@ -807,4 +875,5 @@ function run_all_tests()
     }
 
     __test_summary(_total, _passed);
+    return _passed == _total;
 }

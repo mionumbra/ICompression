@@ -14,6 +14,7 @@ out/
 templates/
 /docs
 docs/documentation.json
+/release
 *.o
 *.obj
 *.dll

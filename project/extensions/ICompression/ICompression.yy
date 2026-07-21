@@ -9,12 +9,12 @@
   "androidPermissions": [],
   "androidProps": false,
   "androidsourcedir": "",
-  "author": "",
+  "author": "Mionumbra",
   "classname": "",
   "copyToTargets": 64,
   "description": "Advanced compression/decompression library",
   "exportToGame": true,
-  "extensionVersion": "1.0.0",
+  "extensionVersion": "1.0.1",
   "files": [
     {
       "$GMExtensionFile": "v1",
@@ -22,7 +22,7 @@
       "constants": [],
       "copyToTargets": -1,
       "filename": "ICompression.ext",
-      "final": "",
+      "final": "ic_shutdown",
       "functions": [
         {
           "$GMExtensionFunction": "",
@@ -197,6 +197,26 @@
         },
         {
           "$GMExtensionFunction": "",
+          "%Name": "__ic_list_page",
+          "argCount": 4,
+          "args": [
+            1,
+            2,
+            1,
+            2
+          ],
+          "documentation": "@param {String} archive\r\n@param {Real} offset\r\n@param {Pointer} _ret_buffer\r\n@param {Real} _ret_buffer_length\r\n@returns {Real}",
+          "externalName": "__EXT_NATIVE__ic_list_page",
+          "help": "",
+          "hidden": true,
+          "kind": 4,
+          "name": "__ic_list_page",
+          "resourceType": "GMExtensionFunction",
+          "resourceVersion": "2.0",
+          "returnType": 2
+        },
+        {
+          "$GMExtensionFunction": "",
           "%Name": "__ic_extract",
           "argCount": 4,
           "args": [
@@ -365,6 +385,21 @@
         },
         {
           "$GMExtensionFunction": "",
+          "%Name": "ic_shutdown",
+          "argCount": 0,
+          "args": [],
+          "documentation": "@returns {Real}",
+          "externalName": "__EXT_NATIVE__ic_shutdown",
+          "help": "",
+          "hidden": false,
+          "kind": 4,
+          "name": "ic_shutdown",
+          "resourceType": "GMExtensionFunction",
+          "resourceVersion": "2.0",
+          "returnType": 2
+        },
+        {
+          "$GMExtensionFunction": "",
           "%Name": "__ic_detect",
           "argCount": 4,
           "args": [
@@ -493,7 +528,7 @@
   "iosProps": false,
   "iosSystemFrameworkEntries": [],
   "iosThirdPartyFrameworkEntries": [],
-  "license": "",
+  "license": "MIT",
   "maccompilerflags": "",
   "maclinkerflags": "",
   "macsourcedir": "",
@@ -509,7 +544,7 @@
   "resourceType": "GMExtension",
   "resourceVersion": "2.0",
   "sourcedir": "",
-  "supportedTargets": -1,
+  "supportedTargets": 64,
   "tvosclassname": "",
   "tvosCocoaPodDependencies": "",
   "tvosCocoaPods": "",

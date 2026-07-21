@@ -1,5 +1,5 @@
-run_all_tests();
+var _tests_passed = run_all_tests();
+if (!_tests_passed) {
+    show_error("ICompression test suite failed", true);
+}
 game_end();
-
-// show_debug_message("测试2测试2测试2测试2测试2测试2测试2测试2测试2测试2测试2测试2测试2测试2");
-// show_debug_message(ic_extract("15735.zip", @"D:\Users\%USERNAME%\Documents\GameMaker-LTS\Projects\ICompression\测试"))

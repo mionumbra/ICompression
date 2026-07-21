@@ -14,12 +14,7 @@
     {"$GMFolder":"","%Name":"ICompression","folderPath":"folders/Extensions/ICompression.yy","name":"ICompression","resourceType":"GMFolder","resourceVersion":"2.0",},
   ],
   "ForcedPrefabProjectReferences":[],
-  "IncludedFiles":[
-    {"$GMIncludedFile":"","%Name":"15735.zip","CopyToMask":-1,"filePath":"datafiles","name":"15735.zip","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
-    {"$GMIncludedFile":"","%Name":"15736.zip","CopyToMask":-1,"filePath":"datafiles","name":"15736.zip","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
-    {"$GMIncludedFile":"","%Name":"test_archive.zip","CopyToMask":-1,"filePath":"datafiles","name":"test_archive.zip","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
-    {"$GMIncludedFile":"","%Name":"文本.zip","CopyToMask":-1,"filePath":"datafiles/文本","name":"文本.zip","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
-  ],
+  "IncludedFiles":[],
   "isEcma":false,
   "LibraryEmitters":[],
   "MetaData":{
