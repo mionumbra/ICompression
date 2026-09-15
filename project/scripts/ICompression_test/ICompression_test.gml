@@ -24,6 +24,98 @@ function __test_cleanup_dir(_dir)
     if (directory_exists(_dir)) directory_destroy(_dir);
 }
 
+// Regression tests own their resources so a failed assertion still closes writers
+// and releases buffers before returning to the suite.
+function __test_assert(_condition, _message)
+{
+    if (!_condition) throw _message;
+}
+
+function __test_buffer(_context, _size)
+{
+    var _buffer = buffer_create(_size, buffer_fixed, 1);
+    array_push(_context.buffers, _buffer);
+    return _buffer;
+}
+
+function __test_load_buffer(_context, _path)
+{
+    var _buffer = buffer_load(_path);
+    __test_assert(_buffer >= 0, "buffer_load: " + _path);
+    array_push(_context.buffers, _buffer);
+    return _buffer;
+}
+
+function __test_writer(_context, _filename, _format)
+{
+    var _path = _context.directory + "/" + _filename;
+    array_push(_context.files, _path);
+    var _handle = ic_create(_path, _format);
+    __test_assert(_handle >= 0, "ic_create: " + _filename);
+    array_push(_context.handles, _handle);
+    return _handle;
+}
+
+function __test_close_writer(_context, _handle)
+{
+    var _closed = ic_close(_handle);
+    for (var _index = 0; _index < array_length(_context.handles); ++_index) {
+        if (_context.handles[_index] == _handle) _context.handles[_index] = -1;
+    }
+    __test_assert(_closed, "ic_close: " + string(_handle));
+}
+
+function __test_equal_bytes(_first, _first_offset, _second, _second_offset, _length)
+{
+    for (var _index = 0; _index < _length; ++_index) {
+        if (buffer_peek(_first, _first_offset + _index, buffer_u8) != buffer_peek(_second, _second_offset + _index, buffer_u8)) return false;
+    }
+    return true;
+}
+
+function __test_with_resources(_name, _body)
+{
+    show_debug_message("--- " + _name + " ---");
+    var _context = { directory: __test_temp_dir() + "_" + string(get_timer()), buffers: [], handles: [], files: [] };
+    var _passed = true;
+    try {
+        directory_create(_context.directory);
+        __test_assert(directory_exists(_context.directory), "create temporary directory");
+        _body(_context);
+    }
+    catch (_exception) {
+        show_debug_message("[FAIL] " + _name + ": " + string(_exception));
+        _passed = false;
+    }
+
+    for (var _index = 0; _index < array_length(_context.handles); ++_index) {
+        var _handle = _context.handles[_index];
+        if (_handle < 0) continue;
+        try { __test_assert(ic_close(_handle), "close abandoned writer"); }
+        catch (_exception) { show_debug_message("[FAIL] cleanup handle: " + string(_exception)); _passed = false; }
+    }
+    for (var _index = 0; _index < array_length(_context.buffers); ++_index) {
+        var _buffer = _context.buffers[_index];
+        try { if (buffer_exists(_buffer)) buffer_delete(_buffer); }
+        catch (_exception) { show_debug_message("[FAIL] cleanup buffer: " + string(_exception)); _passed = false; }
+    }
+    for (var _index = 0; _index < array_length(_context.files); ++_index) {
+        var _path = _context.files[_index];
+        try {
+            if (file_exists(_path)) file_delete(_path);
+            __test_assert(!file_exists(_path), "delete temporary file: " + _path);
+        }
+        catch (_exception) { show_debug_message("[FAIL] cleanup file: " + string(_exception)); _passed = false; }
+    }
+    try {
+        if (directory_exists(_context.directory)) directory_destroy(_context.directory);
+        __test_assert(!directory_exists(_context.directory), "delete temporary directory");
+    }
+    catch (_exception) { show_debug_message("[FAIL] cleanup directory: " + string(_exception)); _passed = false; }
+    if (_passed) show_debug_message("[OK] " + _name);
+    return _passed;
+}
+
 // =============================================================================
 // TEST: ic_to_str
 // =============================================================================
@@ -387,8 +479,8 @@ function test_binary_buffer_apis()
         }
     }
 
-    if (ic_add_buf(-1, "bad", _source, -1, 1)) {
-        show_debug_message("[FAIL] add_buf accepted invalid range");
+    if (ic_add_buf(-1, "bad", _source, 0, 1)) {
+        show_debug_message("[FAIL] add_buf accepted invalid handle with valid range");
         buffer_delete(_source);
         buffer_delete(_compressed);
         buffer_delete(_roundtrip);
@@ -623,7 +715,7 @@ function test_edge_cases()
     show_debug_message("--- test_edge_cases ---");
 
     var _comp_empty = ic_compress("", CompressionFormat.Gzip, CompressionLevel.Default);
-    if (_comp_empty == undefined) { show_debug_message("[FAIL] compress empty string"); return false; }
+    if (_comp_empty == undefined || _comp_empty == "") { show_debug_message("[FAIL] compress empty string"); return false; }
     if (ic_decompress(_comp_empty, CompressionFormat.Gzip) != "") { show_debug_message("[FAIL] decompress empty round-trip"); return false; }
 
     if (ic_compress("X", CompressionFormat.Gzip, CompressionLevel.Default) == "") { show_debug_message("[FAIL] compress single byte"); return false; }
@@ -636,11 +728,12 @@ function test_edge_cases()
     if (string_length(_comp_big) >= string_length(_big)) { show_debug_message("[FAIL] large data actually compressed"); return false; }
     if (ic_decompress(_comp_big, CompressionFormat.Zstd) != _big) { show_debug_message("[FAIL] large data round-trip"); return false; }
 
-    var _bin_data = chr(0) + chr(1) + chr(2) + chr(254) + chr(255) + "hello" + chr(0) + "world";
-    var _comp_bin = ic_compress(_bin_data, CompressionFormat.Gzip, CompressionLevel.Default);
-    var _dec_bin = ic_decompress(_comp_bin, CompressionFormat.Gzip);
-    if (string_byte_length(_dec_bin) != string_byte_length(_bin_data)) { show_debug_message("[FAIL] binary data length match"); return false; }
-    if (_dec_bin != _bin_data) { show_debug_message("[FAIL] binary data round-trip"); return false; }
+    var _utf8_text = "中文 / café / 🙂 / GameMaker";
+    var _comp_utf8 = ic_compress(_utf8_text, CompressionFormat.Gzip, CompressionLevel.Default);
+    if (_comp_utf8 == "") { show_debug_message("[FAIL] UTF-8 text compressed"); return false; }
+    var _dec_utf8 = ic_decompress(_comp_utf8, CompressionFormat.Gzip);
+    if (string_byte_length(_dec_utf8) != string_byte_length(_utf8_text)) { show_debug_message("[FAIL] UTF-8 byte length match"); return false; }
+    if (_dec_utf8 != _utf8_text) { show_debug_message("[FAIL] UTF-8 text round-trip"); return false; }
 
     show_debug_message("[OK] test_edge_cases");
     return true;
@@ -765,45 +858,384 @@ function test_error_handling()
     return true;
 }
 
-function test_list_pagination()
+// Stream APIs must preserve arbitrary payload bytes without unpacking an inner archive.
+function test_binary_stream_roundtrips()
 {
-    show_debug_message("--- test_list_pagination ---");
-    var _dir = __test_temp_dir();
-    directory_create(_dir);
-    var _archive_path = _dir + "/paged.zip";
-    var _handle = ic_create(_archive_path, CompressionFormat.Zip);
-    if (_handle < 0) { __test_cleanup_dir(_dir); return false; }
+    return __test_with_resources("test_binary_stream_roundtrips", function(_context) {
+        var _handle = __test_writer(_context, "inner.zip", CompressionFormat.Zip);
+        __test_assert(ic_add_data(_handle, "inside.txt", "INNER-ZIP-CONTENT"), "create nested ZIP payload");
+        __test_close_writer(_context, _handle);
+        var _zip = __test_load_buffer(_context, _context.directory + "/inner.zip");
+        var _zeros = __test_buffer(_context, 1024);
+        buffer_fill(_zeros, 0, buffer_u8, 0, 1024);
+        var _empty = __test_buffer(_context, 1);
+        var _inputs = [_zeros, _zip, _empty];
+        var _lengths = [1024, buffer_get_size(_zip), 0];
+        var _names = ["zero bytes", "ZIP bytes", "empty"];
+        var _formats = [CompressionFormat.Gzip, CompressionFormat.Bzip2, CompressionFormat.Zstd, CompressionFormat.Lz4, CompressionFormat.Xz, CompressionFormat.Raw];
+        var _capacity = buffer_get_size(_zip) + 16384;
+        var _compressed = __test_buffer(_context, _capacity);
+        var _restored = __test_buffer(_context, _capacity);
+        var _nested = __test_buffer(_context, _capacity);
 
-    for (var _index = 0; _index < 40; ++_index) {
-        if (!ic_add_data(_handle, $"entry_{_index}.txt", "x")) {
-            ic_close(_handle);
-            __test_cleanup_dir(_dir);
-            return false;
+        for (var _format_index = 0; _format_index < array_length(_formats); ++_format_index) {
+            var _format = _formats[_format_index];
+            for (var _input_index = 0; _input_index < array_length(_inputs); ++_input_index) {
+                var _input = _inputs[_input_index];
+                var _length = _lengths[_input_index];
+                var _label = ic_to_str(_format) + " / " + _names[_input_index];
+                buffer_fill(_compressed, 0, buffer_u8, 165, _capacity);
+                buffer_fill(_restored, 0, buffer_u8, 165, _capacity);
+                var _compressed_result = ic_compress_buf_range(_input, 0, _length, _compressed, 0, _format, CompressionLevel.Default);
+                __test_assert(_compressed_result.success, _label + " compress: " + _compressed_result.error_message);
+                __test_assert(_compressed_result.bytes_required == _compressed_result.bytes_written, _label + " compressed capacity");
+                if (_format == CompressionFormat.Raw) {
+                    __test_assert(_compressed_result.bytes_written == _length, _label + " raw size identity");
+                    __test_assert(__test_equal_bytes(_input, 0, _compressed, 0, _length), _label + " raw byte identity");
+                }
+                else __test_assert(_compressed_result.bytes_written > 0, _label + " must contain a stream frame");
+                var _restored_result = ic_decompress_buf_range(_compressed, 0, _compressed_result.bytes_written, _restored, 0, _format);
+                __test_assert(_restored_result.success, _label + " decompress: " + _restored_result.error_message);
+                __test_assert(_restored_result.bytes_written == _length, _label + " expected " + string(_length) + " bytes, got " + string(_restored_result.bytes_written));
+                __test_assert(_restored_result.bytes_required == _length, _label + " restored capacity");
+                __test_assert(__test_equal_bytes(_input, 0, _restored, 0, _length), _label + " restored byte identity");
+                __test_assert(buffer_peek(_restored, _length, buffer_u8) == 165, _label + " wrote beyond payload");
+            }
+            if (_format != CompressionFormat.Raw) {
+                var _label = ic_to_str(_format) + " / same-filter nested frame";
+                var _inner_result = ic_compress_buf_range(_zeros, 0, 1024, _compressed, 0, _format, CompressionLevel.Default);
+                __test_assert(_inner_result.success && _inner_result.bytes_written > 0, _label + " inner compression");
+                var _outer_result = ic_compress_buf_range(_compressed, 0, _inner_result.bytes_written, _nested, 0, _format, CompressionLevel.Default);
+                __test_assert(_outer_result.success && _outer_result.bytes_written > 0, _label + " outer compression");
+                var _restored_result = ic_decompress_buf_range(_nested, 0, _outer_result.bytes_written, _restored, 0, _format);
+                __test_assert(_restored_result.success, _label + ": " + _restored_result.error_message);
+                __test_assert(_restored_result.bytes_written == _inner_result.bytes_written, _label + " removes only outer frame");
+                __test_assert(__test_equal_bytes(_compressed, 0, _restored, 0, _inner_result.bytes_written), _label + " preserves inner bytes");
+            }
+            if (_format == CompressionFormat.Lz4) {
+                // Both paths used to reach libarchive's LZ4 close callback before checksum initialization.
+                for (var _empty_case = 0; _empty_case < 2; ++_empty_case) {
+                    var _filename = "empty_handle_" + string(_empty_case) + ".lz4";
+                    var _empty_handle = __test_writer(_context, _filename, CompressionFormat.Lz4);
+                    if (_empty_case == 1) __test_assert(ic_add_data(_empty_handle, "empty", ""), "LZ4 empty entry add");
+                    __test_close_writer(_context, _empty_handle);
+                    var _empty_frame = __test_load_buffer(_context, _context.directory + "/" + _filename);
+                    var _frame_length = buffer_get_size(_empty_frame);
+                    __test_assert(_frame_length > 0 && ic_detect(_empty_frame) == CompressionFormat.Lz4, "LZ4 handle produces a frame");
+                    var _empty_result = ic_decompress_buf_range(_empty_frame, 0, _frame_length, _restored, 0, CompressionFormat.Lz4);
+                    __test_assert(_empty_result.success && _empty_result.bytes_written == 0 && _empty_result.bytes_required == 0,
+                        "LZ4 empty handle case " + string(_empty_case) + ": " + _empty_result.error_message);
+                }
+            }
+            show_debug_message("  [OK] " + ic_to_str(_format) + " binary subcase matrix");
         }
-    }
-    if (!ic_close(_handle)) { __test_cleanup_dir(_dir); return false; }
-
-    var _offset = 0;
-    var _count = 0;
-    repeat (4) {
-        var _page = ic_list_page(_archive_path, _offset);
-        if (!_page.success) {
-            show_debug_message($"[FAIL] list page: {_page.error_message}");
-            __test_cleanup_dir(_dir);
-            return false;
-        }
-        _count += array_length(_page.entries);
-        if (!_page.has_more) break;
-        _offset = _page.next_offset;
-    }
-
-    file_delete(_archive_path);
-    directory_destroy(_dir);
-    if (_count != 40) { show_debug_message($"[FAIL] paged list count {_count}"); return false; }
-    show_debug_message("[OK] test_list_pagination");
-    return true;
+    });
 }
 
+function test_archive_buffer_roundtrips()
+{
+    return __test_with_resources("test_archive_buffer_roundtrips", function(_context) {
+        var _input = __test_buffer(_context, 256);
+        for (var _index = 0; _index < 256; ++_index) buffer_poke(_input, _index, buffer_u8, _index);
+        var _compressed = __test_buffer(_context, 32768);
+        var _output = __test_buffer(_context, 512);
+        var _formats = [CompressionFormat.Zip, CompressionFormat.SevenZ, CompressionFormat.Tar];
+        var _lengths = [256, 0];
+        for (var _format_index = 0; _format_index < array_length(_formats); ++_format_index) {
+            var _format = _formats[_format_index];
+            for (var _length_index = 0; _length_index < array_length(_lengths); ++_length_index) {
+                var _length = _lengths[_length_index];
+                var _label = ic_to_str(_format) + " archive buffer / " + string(_length) + " bytes";
+                buffer_fill(_output, 0, buffer_u8, 165, 512);
+                var _encoded = ic_compress_buf_range(_input, 0, _length, _compressed, 0, _format, CompressionLevel.Default);
+                __test_assert(_encoded.success && _encoded.bytes_written > 0, _label + " compress: " + _encoded.error_message);
+                __test_assert(_encoded.bytes_required == _encoded.bytes_written, _label + " compressed capacity");
+                var _decoded = ic_decompress_buf_range(_compressed, 0, _encoded.bytes_written, _output, 0, _format);
+                __test_assert(_decoded.success, _label + " decompress: " + _decoded.error_message);
+                __test_assert(_decoded.bytes_written == _length && _decoded.bytes_required == _length, _label + " decoded length");
+                __test_assert(__test_equal_bytes(_input, 0, _output, 0, _length), _label + " byte identity");
+                __test_assert(buffer_peek(_output, _length, buffer_u8) == 165, _label + " wrote beyond payload");
+            }
+        }
+    });
+}
+function test_stream_validation()
+{
+    return __test_with_resources("test_stream_validation", function(_context) {
+        var _text = "plain uncompressed payload";
+        var _length = string_byte_length(_text);
+        var _input = __test_buffer(_context, _length);
+        buffer_write(_input, buffer_text, _text);
+        var _compressed = __test_buffer(_context, 8192);
+        var _output = __test_buffer(_context, 8192);
+        var _gzip = ic_compress_buf_range(_input, 0, _length, _compressed, 0, CompressionFormat.Gzip, CompressionLevel.Default);
+        __test_assert(_gzip.success && _gzip.bytes_written > 0, "valid gzip setup");
+        var _wrong = ic_decompress_buf_range(_compressed, 0, _gzip.bytes_written, _output, 0, CompressionFormat.Zstd);
+        __test_assert(!_wrong.success && _wrong.bytes_written == 0 && _wrong.error_message != "", "reject gzip supplied as Zstd");
+        var _plain = ic_decompress_buf_range(_input, 0, _length, _output, 0, CompressionFormat.Gzip);
+        __test_assert(!_plain.success && _plain.bytes_written == 0 && _plain.error_message != "", "reject uncompressed input supplied as gzip");
+        var _empty = ic_decompress_buf_range(_input, 0, 0, _output, 0, CompressionFormat.Gzip);
+        __test_assert(!_empty.success && _empty.bytes_written == 0 && _empty.error_message != "", "reject absent gzip frame");
+        __test_assert(_gzip.bytes_written > 8, "gzip fixture contains header and trailer");
+        var _header = ic_decompress_buf_range(_compressed, 0, 2, _output, 0, CompressionFormat.Gzip);
+        __test_assert(!_header.success && _header.bytes_written == 0 && _header.error_message != "", "reject truncated gzip header");
+        var _trailer = ic_decompress_buf_range(_compressed, 0, _gzip.bytes_written - 1, _output, 0, CompressionFormat.Gzip);
+        __test_assert(!_trailer.success && _trailer.bytes_written == 0 && _trailer.error_message != "", "reject truncated gzip trailer");
+        buffer_poke(_compressed, _gzip.bytes_written, buffer_u8, 65);
+        var _garbage = ic_decompress_buf_range(_compressed, 0, _gzip.bytes_written + 1, _output, 0, CompressionFormat.Gzip);
+        __test_assert(!_garbage.success && _garbage.bytes_written == 0 && _garbage.error_message != "", "reject valid gzip followed by garbage");
+        var _rar = ic_compress_buf_range(_input, 0, 0, _output, 0, CompressionFormat.Rar, CompressionLevel.Default);
+        __test_assert(!_rar.success && _rar.bytes_written == 0 && _rar.error_message != "", "reject unsupported RAR even with empty input");
+
+        var _empty_path = _context.directory + "/empty_input.bin";
+        var _existing_path = _context.directory + "/existing_output.bin";
+        array_push(_context.files, _empty_path);
+        array_push(_context.files, _existing_path);
+        buffer_save_ext(_input, _empty_path, 0, 0);
+        __test_assert(file_exists(_empty_path), "empty file fixture exists");
+        var _source_check = file_bin_open(_empty_path, 0);
+        __test_assert(_source_check >= 0, "empty file fixture opens");
+        var _source_size = file_bin_size(_source_check);
+        file_bin_close(_source_check);
+        __test_assert(_source_size == 0, "empty file fixture has zero bytes");
+        buffer_save(_input, _existing_path);
+        __test_assert(file_exists(_existing_path), "existing output fixture exists");
+        __test_assert(!ic_compress_file(_empty_path, _existing_path, CompressionFormat.Rar, CompressionLevel.Default), "empty file RAR compression fails");
+        var _preserved = __test_load_buffer(_context, _existing_path);
+        __test_assert(buffer_get_size(_preserved) == _length && __test_equal_bytes(_input, 0, _preserved, 0, _length), "failed RAR compression preserves existing output");
+    });
+}
+
+function test_buffer_invalid_ranges()
+{
+    return __test_with_resources("test_buffer_invalid_ranges", function(_context) {
+        var _input = __test_buffer(_context, 8);
+        buffer_fill(_input, 0, buffer_u8, 42, 8);
+        var _output = __test_buffer(_context, 128);
+        var _handle = __test_writer(_context, "range.zip", CompressionFormat.Zip);
+        __test_assert(!ic_add_buf(_handle, "negative_offset", _input, -1, 1), "valid handle rejects negative offset");
+        __test_assert(!ic_add_buf(_handle, "negative_length", _input, 0, -1), "valid handle rejects negative length");
+        __test_assert(!ic_add_buf(_handle, "overflow", _input, 7, 2), "valid handle rejects range beyond input");
+        __test_assert(ic_add_buf(_handle, "valid", _input, 0, 8), "valid handle remains usable after invalid ranges");
+        __test_close_writer(_context, _handle);
+        var _entries = ic_list(_context.directory + "/range.zip");
+        __test_assert(array_length(_entries) == 1 && _entries[0].filename == "valid", "invalid additions leave no archive entries");
+
+        var _bad = ic_compress_buf_range(_input, 7, 2, _output, 0, CompressionFormat.Gzip, CompressionLevel.Default);
+        __test_assert(!_bad.success && _bad.bytes_written == 0, "compress rejects invalid input range");
+        _bad = ic_compress_buf_range(_input, 0, 8, _output, -1, CompressionFormat.Gzip, CompressionLevel.Default);
+        __test_assert(!_bad.success && _bad.bytes_written == 0, "compress rejects negative output offset");
+        var _small = __test_buffer(_context, 1);
+        buffer_poke(_small, 0, buffer_u8, 165);
+        var _small_result = ic_compress_buf_range(_input, 0, 8, _small, 0, CompressionFormat.Gzip, CompressionLevel.Default);
+        __test_assert(!_small_result.success && _small_result.bytes_written == 0 && _small_result.bytes_required > 1, "compress reports required capacity");
+        __test_assert(buffer_peek(_small, 0, buffer_u8) == 165, "failed compression does not write output");
+        var _compressed = ic_compress_buf_range(_input, 0, 8, _output, 0, CompressionFormat.Gzip, CompressionLevel.Default);
+        __test_assert(_compressed.success && _compressed.bytes_written == _small_result.bytes_required, "compression retry uses required capacity");
+        var _restored = ic_decompress_buf_range(_output, 0, _compressed.bytes_written, _small, 0, CompressionFormat.Gzip);
+        __test_assert(!_restored.success && _restored.bytes_written == 0 && _restored.bytes_required == 8, "decompress reports required capacity");
+        __test_assert(buffer_peek(_small, 0, buffer_u8) == 165, "failed decompression does not write output");
+        _bad = ic_decompress_buf_range(_output, 0, _compressed.bytes_written, _input, 9, CompressionFormat.Gzip);
+        __test_assert(!_bad.success && _bad.bytes_written == 0, "decompress rejects output offset beyond buffer");
+    });
+}
+
+function test_archive_format_detection()
+{
+    return __test_with_resources("test_archive_format_detection", function(_context) {
+        var _zip_handle = __test_writer(_context, "empty.zip", CompressionFormat.Zip);
+        __test_close_writer(_context, _zip_handle);
+        var _tar_handle = __test_writer(_context, "detect.tar", CompressionFormat.Tar);
+        __test_assert(ic_add_data(_tar_handle, "entry.txt", "tar detection payload"), "tar detection setup");
+        __test_close_writer(_context, _tar_handle);
+        var _filenames = ["empty.zip", "detect.tar"];
+        var _formats = [CompressionFormat.Zip, CompressionFormat.Tar];
+        for (var _index = 0; _index < array_length(_filenames); ++_index) {
+            var _path = _context.directory + "/" + _filenames[_index];
+            var _buffer = __test_load_buffer(_context, _path);
+            __test_assert(ic_detect(_buffer) == _formats[_index], "buffer detects " + _filenames[_index]);
+            __test_assert(ic_detect_file(_path) == _formats[_index], "file detects " + _filenames[_index]);
+        }
+    });
+}
+
+function test_list_pagination()
+{
+    return __test_with_resources("test_list_pagination", function(_context) {
+        var _sizes = [0, 15, 16, 17, 32, 40];
+        for (var _size_index = 0; _size_index < array_length(_sizes); ++_size_index) {
+            var _size = _sizes[_size_index];
+            var _filename = "paged_" + string(_size) + ".zip";
+            var _path = _context.directory + "/" + _filename;
+            var _handle = __test_writer(_context, _filename, CompressionFormat.Zip);
+            for (var _index = 0; _index < _size; ++_index) {
+                __test_assert(ic_add_data(_handle, "entry_" + string(_index) + ".txt", "x"), "pagination archive setup");
+            }
+            __test_close_writer(_context, _handle);
+            var _offset = 0;
+            var _count = 0;
+            var _seen = array_create(_size, false);
+            var _page_count = max(1, ceil(_size / 16));
+            for (var _page_index = 0; _page_index < _page_count; ++_page_index) {
+                var _page = ic_list_page(_path, _offset);
+                var _label = string(_size) + " entries / page " + string(_page_index);
+                __test_assert(_page.success, _label + ": " + _page.error_message);
+                var _expected_count = min(16, _size - _offset);
+                __test_assert(array_length(_page.entries) == _expected_count, _label + " page size");
+                for (var _index = 0; _index < _expected_count; ++_index) {
+                    var _entry_index = _offset + _index;
+                    __test_assert(!_seen[_entry_index], _label + " duplicate entry");
+                    __test_assert(_page.entries[_index].filename == "entry_" + string(_entry_index) + ".txt", _label + " filename/order");
+                    _seen[_entry_index] = true;
+                }
+                _count += _expected_count;
+                __test_assert(_page.next_offset == _count, _label + " next_offset");
+                __test_assert(_page.has_more == (_count < _size), _label + " has_more");
+                _offset = _page.next_offset;
+            }
+            __test_assert(_count == _size, "pagination total count");
+            for (var _index = 0; _index < _size; ++_index) __test_assert(_seen[_index], "pagination omitted entry");
+            var _past_end = ic_list_page(_path, _size);
+            __test_assert(_past_end.success && array_length(_past_end.entries) == 0 && !_past_end.has_more, "page at end is empty");
+            __test_assert(_past_end.next_offset == _size, "page at end offset");
+            var _negative = ic_list_page(_path, -1);
+            __test_assert(!_negative.success && array_length(_negative.entries) == 0, "reject negative list offset");
+        }
+    });
+}
+// GNU old sparse tar: each entry contains a 512-byte header, one stored byte,
+// and 511 padding bytes, regardless of its logical size. No large buffers.
+function __test_tar_ascii(_buffer, _offset, _text)
+{
+    for (var _index = 1; _index <= string_byte_length(_text); ++_index) {
+        buffer_poke(_buffer, _offset + _index - 1, buffer_u8, string_byte_at(_text, _index));
+    }
+}
+
+function __test_tar_octal(_buffer, _offset, _width, _value)
+{
+    var _digits = "";
+    do {
+        _digits = chr(48 + (_value mod 8)) + _digits;
+        _value = floor(_value / 8);
+    } until (_value == 0);
+    __test_assert(string_length(_digits) < _width, "tar octal field fits");
+    while (string_length(_digits) < _width - 1) _digits = "0" + _digits;
+    __test_tar_ascii(_buffer, _offset, _digits);
+    buffer_poke(_buffer, _offset + _width - 1, buffer_u8, 0);
+}
+
+function __test_sparse_tar(_context, _prefix, _logical_size, _count)
+{
+    var _path = _context.directory + "/" + _prefix + ".tar";
+    array_push(_context.files, _path);
+    var _archive = __test_buffer(_context, _count * 1024 + 1024);
+    buffer_fill(_archive, 0, buffer_u8, 0, buffer_get_size(_archive));
+    var _paths = [];
+    for (var _entry_index = 0; _entry_index < _count; ++_entry_index) {
+        var _header = _entry_index * 1024;
+        var _name = _prefix + "_" + string(_entry_index) + ".bin";
+        var _output_path = _context.directory + "/" + _name;
+        array_push(_context.files, _output_path);
+        array_push(_paths, _output_path);
+        __test_assert(string_byte_length(_name) < 100, "sparse tar filename fits");
+        __test_tar_ascii(_archive, _header, _name);
+        __test_tar_octal(_archive, _header + 100, 8, 420); // 0644
+        __test_tar_octal(_archive, _header + 108, 8, 0);
+        __test_tar_octal(_archive, _header + 116, 8, 0);
+        __test_tar_octal(_archive, _header + 124, 12, 1); // one stored byte
+        __test_tar_octal(_archive, _header + 136, 12, 0);
+        for (var _index = 148; _index < 156; ++_index) buffer_poke(_archive, _header + _index, buffer_u8, 32);
+        buffer_poke(_archive, _header + 156, buffer_u8, ord("S"));
+        __test_tar_ascii(_archive, _header + 257, "ustar  "); // trailing NUL remains zero
+        __test_tar_octal(_archive, _header + 386, 12, _logical_size - 1); // sparse[0].offset
+        __test_tar_octal(_archive, _header + 398, 12, 1); // sparse[0].numbytes
+        // isextended at 482 remains zero; no sparse extension headers.
+        __test_tar_octal(_archive, _header + 483, 12, _logical_size);
+        var _checksum = 0;
+        for (var _index = 0; _index < 512; ++_index) _checksum += buffer_peek(_archive, _header + _index, buffer_u8);
+        __test_tar_octal(_archive, _header + 148, 7, _checksum);
+        buffer_poke(_archive, _header + 155, buffer_u8, 32);
+        buffer_poke(_archive, _header + 512, buffer_u8, 90);
+    }
+    buffer_save(_archive, _path);
+    __test_assert(file_exists(_path), "sparse fixture saved");
+    var _listing = ic_list_page(_path, 0);
+    __test_assert(_listing.success && array_length(_listing.entries) == _count && !_listing.has_more,
+        "sparse fixture lists all entries: " + _listing.error_message);
+    for (var _entry_index = 0; _entry_index < _count; ++_entry_index) {
+        var _entry = _listing.entries[_entry_index];
+        __test_assert(_entry.filename == _prefix + "_" + string(_entry_index) + ".bin", "sparse fixture filename");
+        __test_assert(!_entry.is_directory && _entry.uncompressed_size == _logical_size, "sparse fixture logical size");
+    }
+    return { path: _path, outputs: _paths };
+}
+
+function __test_sparse_file(_path, _expected_size)
+{
+    __test_assert(file_exists(_path), "sparse output exists: " + _path);
+    var _file = file_bin_open(_path, 0);
+    __test_assert(_file >= 0, "sparse output opens");
+    var _read_error = "";
+    var _actual_size = -1;
+    var _first = -1;
+    var _middle = -1;
+    var _before_last = -1;
+    var _last = -1;
+    try {
+        _actual_size = file_bin_size(_file);
+        _first = file_bin_read_byte(_file);
+        file_bin_seek(_file, floor(_expected_size / 2));
+        _middle = file_bin_read_byte(_file);
+        file_bin_seek(_file, _expected_size - 2);
+        _before_last = file_bin_read_byte(_file);
+        _last = file_bin_read_byte(_file);
+    }
+    catch (_exception) { _read_error = string(_exception); }
+    file_bin_close(_file);
+    __test_assert(_read_error == "", "read sparse output: " + _read_error);
+    __test_assert(_actual_size == _expected_size, "sparse logical size expected " + string(_expected_size) + ", got " + string(_actual_size));
+    __test_assert(_first == 0 && _middle == 0 && _before_last == 0 && _last == 90, "sparse holes and final byte");
+}
+
+function test_sparse_extraction_limits()
+{
+    return __test_with_resources("test_sparse_extraction_limits", function(_context) {
+        // The small valid fixture checks every hole byte before the quota cases.
+        var _small_size = 8193;
+        var _small = __test_sparse_tar(_context, "sparse_small", _small_size, 1);
+        var _small_result = ic_extract(_small.path, _context.directory);
+        __test_assert(_small_result.success && _small_result.files_extracted == 1, "small sparse extraction: " + _small_result.error_message);
+        __test_sparse_file(_small.outputs[0], _small_size);
+        var _small_buffer = __test_load_buffer(_context, _small.outputs[0]);
+        __test_assert(buffer_get_size(_small_buffer) == _small_size, "small sparse buffer size");
+        for (var _index = 0; _index < _small_size - 1; ++_index) __test_assert(buffer_peek(_small_buffer, _index, buffer_u8) == 0, "small sparse hole byte " + string(_index));
+        __test_assert(buffer_peek(_small_buffer, _small_size - 1, buffer_u8) == 90, "small sparse last byte");
+
+        // On NTFS, libarchive marks entries with these holes as sparse before
+        // writing the last byte. Each fixture itself is at most 6144 bytes.
+        var _entry_limit = 256 * 1024 * 1024;
+        var _exact = __test_sparse_tar(_context, "sparse_exact", _entry_limit, 4);
+        var _exact_result = ic_extract(_exact.path, _context.directory);
+        __test_assert(_exact_result.success && _exact_result.files_extracted == 4, "exact 1 GiB sparse total succeeds: " + _exact_result.error_message);
+        for (var _index = 0; _index < 4; ++_index) __test_sparse_file(_exact.outputs[_index], _entry_limit);
+
+        var _oversized = __test_sparse_tar(_context, "sparse_oversized", _entry_limit + 1, 1);
+        var _oversized_result = ic_extract(_oversized.path, _context.directory);
+        __test_assert(!_oversized_result.success && _oversized_result.files_extracted == 0, "oversized sparse entry rejected");
+        __test_assert(string_pos("extraction limit", _oversized_result.error_message) > 0, "oversized entry reports quota error: " + _oversized_result.error_message);
+        __test_assert(!file_exists(_oversized.outputs[0]), "oversized sparse entry rejected before file creation");
+
+        var _excess = __test_sparse_tar(_context, "sparse_excess", _entry_limit, 5);
+        var _excess_result = ic_extract(_excess.path, _context.directory);
+        // Validate the four permitted outputs even on the old implementation.
+        for (var _index = 0; _index < 4; ++_index) __test_sparse_file(_excess.outputs[_index], _entry_limit);
+        __test_assert(!_excess_result.success && _excess_result.files_extracted == 4,
+            "sparse total exceeds 1 GiB: expected failure after 4 files, got success=" + string(_excess_result.success) + ", files=" + string(_excess_result.files_extracted));
+        __test_assert(string_pos("extraction limit", _excess_result.error_message) > 0, "sparse total reports quota error: " + _excess_result.error_message);
+        __test_assert(!file_exists(_excess.outputs[4]), "fifth sparse file rejected before creation");
+    });
+}
 function test_open_handle_limit()
 {
     show_debug_message("--- test_open_handle_limit ---");
@@ -864,7 +1296,13 @@ function run_all_tests()
         test_detect_file,
         test_7z_archive,
         test_error_handling,
+        test_binary_stream_roundtrips,
+        test_archive_buffer_roundtrips,
+        test_stream_validation,
+        test_buffer_invalid_ranges,
+        test_archive_format_detection,
         test_list_pagination,
+        test_sparse_extraction_limits,
         test_open_handle_limit,
     ];
 

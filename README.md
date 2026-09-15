@@ -7,7 +7,7 @@ ICompression is a native compression, decompression, and archive extension for G
 - Platform: Windows x64
 - GameMaker: tested with IDE 2026.0.0.16 and Runtime 2026.0.0.23
 - Runner: Windows VM tested; YYC requires a configured GameMaker C++ toolchain
-- Extension version: 1.0.1
+- Extension version: 1.0.3.1 (defined by `extensionVersion` in `project/extensions/ICompression/ICompression.yy`)
 
 Supported stream filters are gzip, bzip2, zstd, LZ4, and xz. ZIP, 7z, and tar archives can be created and read. RAR is detection/read-only through libarchive; RAR creation is not supported.
 
@@ -33,6 +33,10 @@ var restored = ic_decompress(compressed, CompressionFormat.Zstd);
 ```
 
 Use the range APIs for arbitrary binary data. String APIs are text-only and must not be used for data containing NUL bytes.
+
+Decompression requires the supplied format to match the input and removes exactly one compression layer. ZIP/TAR bytes or a second compressed stream inside gzip, bzip2, zstd, LZ4, or xz are returned unchanged after that outer layer is removed. `Raw` copies bytes without interpreting them. Pass the actual compressed byte count to the range APIs; spare buffer capacity and trailing garbage are not part of a compressed stream. A valid compressed empty stream succeeds with zero output bytes, while missing or mismatched framing fails.
+
+When explicitly using `Zip`, `SevenZ`, `Tar`, or `Rar` with the decompression APIs, the result is the first regular entry. Use archive extraction APIs when you need named entries or the complete archive.
 
 ```gml
 var input = buffer_load("input.bin");
@@ -80,12 +84,12 @@ repeat (65535) {
 }
 ```
 
-`ic_list()` remains available as a convenience for the first page only. Use `ic_list_page()` when archives may contain more than 16 entries.
+`ic_list()` remains available as a convenience for the first page only. Use `ic_list_page()` when archives may contain more than 16 entries. `has_more` is false on the final page, including a full 16-entry page.
 
 ## Limits And Safety
 
-- Maximum decompressed size per entry: 256 MiB
-- Maximum total full-extraction output: 1 GiB
+- Maximum decompressed size per entry: 256 MiB, including sparse-file holes
+- Maximum total full-extraction output: 1 GiB, including sparse-file holes
 - Maximum entries scanned: 65,535
 - Maximum extraction path length: 4,096 UTF-8 bytes
 - Maximum simultaneously open archive writers: 64
@@ -99,20 +103,39 @@ Extraction failure can leave files already written before the failure. Extract u
 
 Required tools:
 
-- `extgen v1.225bddc` (GM-ExtensionGenerator v1.0.1)
-- CMake 3.21 or newer
-- Visual Studio 2026 with the current C++ toolset and a Windows SDK for the included release script
-- `gm-cli` 2.2.0 for GameMaker validation
+- PowerShell 7 or newer and Git
+- `extgen v1.d8c68bd`; the previously verified `v1.225bddc` is also accepted
+- CMake 4.2 or newer for the default Visual Studio 2026 generator
+- Visual Studio 2026 with the C++ toolset and a Windows SDK
+- `gm-cli` (validated with 2.3.0) with a configured GameMaker account and license; the default runtime is downloaded automatically when needed
 
 The DLL uses the dynamic Microsoft C/C++ runtime. End-user machines need a compatible Microsoft Visual C++ Redistributable; test the final archive on a clean Windows x64 machine before publishing.
 
-The authoritative clean build and release command is:
+Create a local release ZIP with:
 
 ```powershell
 pwsh -File "scripts/release.ps1"
 ```
 
-This command regenerates bindings, creates a fresh independent CMake tree, builds the DLL, and runs the project test suite. The test runner exits automatically; a failed assertion terminates the Runner with a nonzero result.
+Version tags use `v<project>.<version1>.<version2>.<build>` (项目版本.版本号1.版本号2.编译次数). All four numeric fields are preserved in the extension metadata, DLL version, and package name; the leading `v` is used only for the Git tag.
+
+The extension `.yy` is the version source for both the DLL resource and package name. The optional `-Version` argument must match it exactly. The script checks tools and paths before generation, compares regenerated extension declarations without rewriting the checked-in `.yy`, creates a fresh `out/release-build` tree, builds the DLL, verifies its version and x64 architecture, and runs the complete VM test suite. Both the process exit status and a successful, nonempty test summary are required. GameMaker uses the runtime selected by the user's gm-cli configuration; the script does not pin a runtime version.
+
+To reuse an existing CMake tree and its downloaded dependencies:
+
+```powershell
+pwsh -File "scripts/release.ps1" -BuildDirectory "out/release-build"
+```
+
+The selected tree must be within the Git workspace and already configured for the same source directory and generator. The script uses `--clean-first` to rebuild it. A source copy may use a matching sibling build directory within the workspace. `-GameMakerCacheDirectory "project/.gmcache"` optionally shares an existing GameMaker cache within the workspace; cache credentials are never packaged. CI may pass another installed generator with `-Generator`; CMake 3.21 or newer is sufficient for Visual Studio 2022.
+
+The staged bundle and ZIP are written under `release/`; nothing is uploaded. The bundle includes dependency license texts, `build-info.json` with source revision, tool/compiler versions, the GameMaker runtime used, and test counts, plus SHA-256 checksums. A separate `.zip.sha256` checks the complete archive. Timestamps and compiler output mean repeated builds are not promised to produce identical ZIP bytes.
+
+Run isolated release preflight checks without compiling or running GameMaker:
+
+```powershell
+pwsh -File "scripts/test-release-preflight.ps1"
+```
 
 For development iteration against an already configured build tree:
 
@@ -121,8 +144,6 @@ extgen --config "config.json"
 cmake --build --preset win-x64-release
 gm-cli run "project/ICompression.yyp" --target=windows --runtime=vm
 ```
-
-The script verifies extgen, regenerates bindings, performs a clean independent build, runs the VM test suite, and creates a staged package with SHA-256 checksums under `release/`. CI may pass a different installed Visual Studio generator with `-Generator`.
 
 ## Source Ownership
 

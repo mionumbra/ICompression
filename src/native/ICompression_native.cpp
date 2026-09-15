@@ -10,6 +10,7 @@
 #include <fstream>
 #include <limits>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -357,14 +358,47 @@ static bool base64_decode(std::string_view input, std::string& output)
         (padding == 2 && bits == 4);
 }
 
+// Validate a complete tar header, including its checksum (also supports old tar).
+static bool is_tar_header(std::string_view data)
+{
+    if (data.size() < 512 || data[0] == '\0')
+        return false;
+
+    uint32_t expected = 0;
+    bool digit_seen = false;
+    bool padding_seen = false;
+    for (size_t i = 148; i < 156; ++i)
+    {
+        const unsigned char c = static_cast<unsigned char>(data[i]);
+        if (c == ' ' || c == '\0')
+        {
+            if (digit_seen) padding_seen = true;
+            continue;
+        }
+        if (padding_seen || c < '0' || c > '7')
+            return false;
+        digit_seen = true;
+        expected = expected * 8 + (c - '0');
+    }
+    if (!digit_seen)
+        return false;
+
+    uint32_t actual = 0;
+    for (size_t i = 0; i < 512; ++i)
+        actual += (i >= 148 && i < 156) ? ' ' : static_cast<unsigned char>(data[i]);
+    return actual == expected;
+}
+
 // Detect format from magic bytes
 static CompressionFormat detect_from_magic(const std::string_view& data)
 {
-    if (data.size() < 4) return CompressionFormat::Raw;
-
     const auto* buf = reinterpret_cast<const uint8_t*>(data.data());
 
-    if (data.size() >= 4 && buf[0] == 0x50 && buf[1] == 0x4B && buf[2] == 0x03 && buf[3] == 0x04)
+    if (data.size() >= 4 && buf[0] == 0x50 && buf[1] == 0x4B &&
+        ((buf[2] == 0x03 && buf[3] == 0x04) ||  // Local file header
+         (buf[2] == 0x05 && buf[3] == 0x06) ||  // Empty ZIP
+         (buf[2] == 0x06 && buf[3] == 0x06) ||  // ZIP64 end record
+         (buf[2] == 0x07 && buf[3] == 0x08)))   // Spanned ZIP marker
         return CompressionFormat::Zip;
 
     if (data.size() >= 6 && buf[0] == 0x37 && buf[1] == 0x7A && buf[2] == 0xBC && buf[3] == 0xAF && buf[4] == 0x27 && buf[5] == 0x1C)
@@ -387,6 +421,9 @@ static CompressionFormat detect_from_magic(const std::string_view& data)
 
     if (data.size() >= 6 && buf[0] == 0xFD && buf[1] == 0x37 && buf[2] == 0x7A && buf[3] == 0x58 && buf[4] == 0x5A && buf[5] == 0x00)
         return CompressionFormat::Xz;
+
+    if (is_tar_header(data))
+        return CompressionFormat::Tar;
 
     return CompressionFormat::Raw;
 }
@@ -453,48 +490,25 @@ static la_ssize_t string_writer_cb(struct archive*, void* client_data,
 static int string_writer_open_cb(struct archive*, void*) { return ARCHIVE_OK; }
 static int string_writer_close_cb(struct archive*, void*) { return ARCHIVE_OK; }
 
-// Read callback for libarchive: reads from std::string_view
-struct StringReader
-{
-    std::string_view data;
-    size_t pos = 0;
-};
-
-static la_ssize_t string_reader_cb(struct archive*, void* client_data,
-    const void** buf)
-{
-    auto* sr = static_cast<StringReader*>(client_data);
-    if (sr->pos >= sr->data.size())
-    {
-        *buf = nullptr;
-        return 0;
-    }
-    *buf = sr->data.data() + sr->pos;
-    la_ssize_t remaining = static_cast<la_ssize_t>(sr->data.size() - sr->pos);
-    sr->pos = sr->data.size();
-    return remaining;
-}
-
-static int string_reader_open_cb(struct archive*, void*) { return ARCHIVE_OK; }
-static int string_reader_close_cb(struct archive*, void*) { return ARCHIVE_OK; }
-
 // =============================================================================
 // Stream compression / decompression
 // =============================================================================
 
-static std::string compress_raw(std::string_view data, CompressionFormat format, int32_t level)
+static bool compress_raw(std::string_view data, CompressionFormat format, int32_t level,
+    std::string& result)
 {
+    result.clear();
     struct archive* a = archive_write_new();
     if (!a)
     {
         LOG_ERROR("ic_compress: archive_write_new() returned null");
-        return {};
+        return false;
     }
 
     if (!configure_archive_writer(a, format, level))
     {
         archive_write_free(a);
-        return {};
+        return false;
     }
 
     archive_write_set_bytes_per_block(a, 0);
@@ -506,7 +520,7 @@ static std::string compress_raw(std::string_view data, CompressionFormat format,
     {
         LOG_ERROR("ic_compress: archive_write_open failed: %s", archive_error_string(a));
         archive_write_free(a);
-        return {};
+        return false;
     }
 
     struct archive_entry* entry = archive_entry_new();
@@ -514,7 +528,7 @@ static std::string compress_raw(std::string_view data, CompressionFormat format,
     {
         archive_write_close(a);
         archive_write_free(a);
-        return {};
+        return false;
     }
 
     archive_entry_set_pathname_utf8(entry, "data");
@@ -527,7 +541,7 @@ static std::string compress_raw(std::string_view data, CompressionFormat format,
         archive_entry_free(entry);
         archive_write_close(a);
         archive_write_free(a);
-        return {};
+        return false;
     }
 
     la_ssize_t written = archive_write_data(a, data.data(), data.size());
@@ -537,73 +551,146 @@ static std::string compress_raw(std::string_view data, CompressionFormat format,
         archive_entry_free(entry);
         archive_write_close(a);
         archive_write_free(a);
-        return {};
+        return false;
     }
     archive_entry_free(entry);
     if (archive_write_close(a) < ARCHIVE_OK)
     {
         LOG_ERROR("ic_compress: archive_write_close failed: %s", archive_error_string(a));
         archive_write_free(a);
-        return {};
+        return false;
     }
     archive_write_free(a);
 
-    return sw.data;
+    result = std::move(sw.data);
+    return true;
 }
 
 static bool decompress_raw(std::string_view data, CompressionFormat format, std::string& result)
 {
-    (void)format;
     result.clear();
-    struct archive* a = archive_read_new();
+    if (format == CompressionFormat::Raw)
+    {
+        if (data.size() > MAX_ENTRY_SIZE)
+        {
+            LOG_ERROR("ic_decompress: raw data exceeds the configured limit");
+            return false;
+        }
+        if (!data.empty()) result.assign(data);
+        return true;
+    }
+
+    int expected_filter = ARCHIVE_FILTER_NONE;
+    int expected_format = 0;
+    switch (format)
+    {
+    case CompressionFormat::Gzip:
+    case CompressionFormat::Bzip2:
+    case CompressionFormat::Zstd:
+    case CompressionFormat::Lz4:
+    case CompressionFormat::Xz:
+        expected_filter = format_to_filter(format);
+        expected_format = ARCHIVE_FORMAT_RAW;
+        break;
+    case CompressionFormat::Zip:    expected_format = ARCHIVE_FORMAT_ZIP; break;
+    case CompressionFormat::SevenZ: expected_format = ARCHIVE_FORMAT_7ZIP; break;
+    case CompressionFormat::Tar:    expected_format = ARCHIVE_FORMAT_TAR; break;
+    case CompressionFormat::Rar:    expected_format = ARCHIVE_FORMAT_RAR; break;
+    default:
+        LOG_ERROR("ic_decompress: unsupported compression format");
+        return false;
+    }
+    // A compressed empty stream still has a header and trailer.
+    if (data.empty())
+        return false;
+
+    std::unique_ptr<struct archive, decltype(&archive_read_free)> reader(
+        archive_read_new(), &archive_read_free);
+    auto* a = reader.get();
     if (!a)
     {
         LOG_ERROR("ic_decompress: archive_read_new() returned null");
         return false;
     }
 
-    archive_read_support_filter_all(a);
-    archive_read_support_format_all(a);
-    archive_read_support_format_raw(a);
-
-    StringReader sr{data, 0};
-    if (archive_read_open(a, &sr, string_reader_open_cb, string_reader_cb, string_reader_close_cb) != ARCHIVE_OK)
+    const bool stream = expected_filter != ARCHIVE_FILTER_NONE;
+    if (stream)
     {
-        archive_read_free(a);
-        return false;
+        // Force one filter and a raw container: bidding can recursively decode
+        // nested streams or interpret the recovered bytes as another archive.
+        if (!archive_status_ok(a, archive_read_set_format(a, ARCHIVE_FORMAT_RAW), "raw reader format") ||
+            !archive_status_ok(a, archive_read_append_filter(a, expected_filter), "stream reader filter"))
+            return false;
     }
+    else
+    {
+        if (!archive_status_ok(a, archive_read_support_format_by_code(a, expected_format), "archive reader format"))
+            return false;
+        if (format == CompressionFormat::Rar &&
+            !archive_status_ok(a, archive_read_support_format_rar5(a), "RAR5 reader format"))
+            return false;
+    }
+
+    // The built-in memory reader also supports seeks required by 7z archives.
+    if (!archive_status_ok(a, archive_read_open_memory(a, data.data(), data.size()),
+            "archive_read_open_memory"))
+        return false;
 
     bool found_entry = false;
     struct archive_entry* entry;
     int header_status;
+    size_t scanned = 0;
     while ((header_status = archive_read_next_header(a, &entry)) == ARCHIVE_OK)
     {
+        if (++scanned > MAX_ARCHIVE_ENTRIES)
+            return false;
         if (archive_entry_filetype(entry) != AE_IFREG)
         {
-            archive_read_data_skip(a);
+            if (archive_read_data_skip(a) < ARCHIVE_OK)
+                return false;
             continue;
         }
 
-        found_entry = true;
         std::string error;
         if (!read_current_entry(a, result, MAX_ENTRY_SIZE, error))
         {
             LOG_ERROR("ic_decompress: %s", error.c_str());
-            archive_read_close(a);
-            archive_read_free(a);
+            result.clear();
             return false;
         }
+        found_entry = true;
         break;
     }
 
-    archive_read_close(a);
-    archive_read_free(a);
-    return found_entry || header_status == ARCHIVE_EOF;
+    const int actual_format = archive_format(a) & ARCHIVE_FORMAT_BASE_MASK;
+    const bool format_matches = actual_format == expected_format ||
+        (format == CompressionFormat::Rar && actual_format == ARCHIVE_FORMAT_RAR_V5);
+    bool success = format_matches && (found_entry || header_status == ARCHIVE_EOF);
+    if (stream)
+    {
+        // Some filters report EOF for non-matching input. Require a complete
+        // frame consumption as well as the explicitly selected filter chain.
+        const la_int64_t consumed = archive_filter_bytes(a, -1);
+        success = success && archive_filter_count(a) == 2 &&
+            archive_filter_code(a, 0) == expected_filter && consumed >= 0 &&
+            static_cast<uint64_t>(consumed) == data.size();
+    }
+    if (archive_read_close(a) < ARCHIVE_OK)
+        success = false;
+    if (!success)
+    {
+        LOG_ERROR("ic_decompress: invalid or mismatched compressed input");
+        result.clear();
+    }
+    return success;
 }
 
 std::string ic_compress(std::string_view data, CompressionFormat format, int32_t level)
 {
-    return base64_encode(compress_raw(data, format, level));
+    std::string compressed;
+    if (!compress_raw(data, format, level, compressed))
+        return {};
+    return base64_encode(compressed);
 }
 
 std::string ic_decompress(std::string_view data, CompressionFormat format)
@@ -636,8 +723,8 @@ bool ic_compress_file(std::string_view src, std::string_view dst, CompressionFor
     if (!in)
         return false;
 
-    std::string compressed = compress_raw(file_data, format, level);
-    if (compressed.empty() && file_size > 0) return false;
+    std::string compressed;
+    if (!compress_raw(file_data, format, level, compressed)) return false;
 
     FOPEN_OFSTREAM(out, dst, std::ios::binary);
     if (!out) return false;
@@ -680,9 +767,8 @@ CompressResult ic_compress_buf(GMBuffer input, GMBuffer output, CompressionForma
     auto  input_len = static_cast<size_t>(input.length());
 
     std::string_view sv(input_data, input_len);
-    std::string compressed = compress_raw(sv, format, level);
-
-    if (compressed.empty() && input_len > 0)
+    std::string compressed;
+    if (!compress_raw(sv, format, level, compressed))
     {
         result.success = false;
         result.original_size = static_cast<int64_t>(input_len);
@@ -700,7 +786,8 @@ CompressResult ic_compress_buf(GMBuffer input, GMBuffer output, CompressionForma
         return result;
     }
 
-    std::memcpy(output.data(), compressed.data(), compressed.size());
+    if (!compressed.empty())
+        std::memcpy(output.data(), compressed.data(), compressed.size());
 
     result.success = true;
     result.original_size = static_cast<int64_t>(input_len);
@@ -724,8 +811,8 @@ BufferResult ic_compress_buf_range(GMBuffer input, int64_t input_offset, int64_t
         return result;
     }
 
-    std::string compressed = compress_raw(std::string_view(input_data, input_size), format, level);
-    if (compressed.empty() && input_size > 0)
+    std::string compressed;
+    if (!compress_raw(std::string_view(input_data, input_size), format, level, compressed))
     {
         result.error_message = "Failed to compress input";
         return result;
@@ -773,7 +860,8 @@ CompressResult ic_decompress_buf(GMBuffer input, GMBuffer output, CompressionFor
         return result;
     }
 
-    std::memcpy(output.data(), decompressed.data(), decompressed.size());
+    if (!decompressed.empty())
+        std::memcpy(output.data(), decompressed.data(), decompressed.size());
 
     result.success = true;
     result.original_size = static_cast<int64_t>(input_len);
@@ -865,11 +953,23 @@ ListResult ic_list_page(std::string_view archive, int32_t offset)
             result.error_message = "Archive contains too many entries";
             break;
         }
+        // A full page is followed by another page only if another header exists.
+        // This lookahead is not consumed in next_offset.
+        if (result.entries.size() == MAX_LIST_PAGE_ENTRIES)
+        {
+            result.has_more = true;
+            result.next_offset = static_cast<int32_t>(scanned);
+            break;
+        }
         ++scanned;
 
         if (scanned <= static_cast<size_t>(offset))
         {
-            archive_read_data_skip(a);
+            if (archive_read_data_skip(a) < ARCHIVE_OK)
+            {
+                result.error_message = archive_error_or(a, "Failed to skip archive data");
+                break;
+            }
             continue;
         }
 
@@ -885,12 +985,9 @@ ListResult ic_list_page(std::string_view archive, int32_t offset)
         ae.is_directory = (archive_entry_filetype(entry) == AE_IFDIR);
         ae.crc32 = 0;
         result.entries.push_back(std::move(ae));
-        archive_read_data_skip(a);
-
-        if (result.entries.size() >= MAX_LIST_PAGE_ENTRIES)
+        if (archive_read_data_skip(a) < ARCHIVE_OK)
         {
-            result.has_more = true;
-            result.next_offset = static_cast<int32_t>(scanned);
+            result.error_message = archive_error_or(a, "Failed to skip archive data");
             break;
         }
     }
@@ -955,7 +1052,8 @@ ExtractResult ic_extract(std::string_view archive, std::string_view output_dir)
     struct archive_entry* entry;
     int header_status;
     size_t entry_count = 0;
-    uint64_t total_extracted = 0;
+    uint64_t total_extracted = 0; // Logical bytes, including sparse holes.
+    uint64_t total_data_written = 0;
     while ((header_status = archive_read_next_header(a, &entry)) == ARCHIVE_OK)
     {
         std::string entry_path = entry_pathname_utf8(entry);
@@ -977,7 +1075,9 @@ ExtractResult ic_extract(std::string_view archive, std::string_view output_dir)
             return result;
         }
 
-        if (archive_entry_size_is_set(entry))
+        const bool size_known = archive_entry_size_is_set(entry);
+        uint64_t entry_logical_size = 0;
+        if (size_known)
         {
             const la_int64_t declared_size = archive_entry_size(entry);
             if (declared_size < 0 || static_cast<uint64_t>(declared_size) > MAX_ENTRY_SIZE ||
@@ -991,7 +1091,12 @@ ExtractResult ic_extract(std::string_view archive, std::string_view output_dir)
                 archive_write_free(ext);
                 return result;
             }
+            entry_logical_size = static_cast<uint64_t>(declared_size);
         }
+        // The disk writer may extend a sparse file to its declared size when
+        // finishing or closing, even if it receives no data blocks. Reserve
+        // that complete size before handing the header to the disk writer.
+        total_extracted += entry_logical_size;
 
         std::string outpath = std::string(output_dir) + "/" + entry_path;
         archive_entry_set_pathname_utf8(entry, outpath.c_str());
@@ -1009,7 +1114,7 @@ ExtractResult ic_extract(std::string_view archive, std::string_view output_dir)
                 const uint64_t block_size = static_cast<uint64_t>(size);
                 if (offset < 0 || block_size > MAX_ENTRY_SIZE - entry_extracted ||
                     static_cast<uint64_t>(offset) > MAX_ENTRY_SIZE - block_size ||
-                    block_size > MAX_TOTAL_EXTRACT_SIZE - total_extracted)
+                    block_size > MAX_TOTAL_EXTRACT_SIZE - total_data_written)
                 {
                     result.error_message = "Archive exceeds the configured extraction limit";
                     result.success = false;
@@ -1019,6 +1124,24 @@ ExtractResult ic_extract(std::string_view archive, std::string_view output_dir)
                     archive_write_free(ext);
                     return result;
                 }
+                const uint64_t block_end = static_cast<uint64_t>(offset) + block_size;
+                const uint64_t logical_growth = block_end > entry_logical_size
+                    ? block_end - entry_logical_size : 0;
+                if ((size_known && block_end > entry_logical_size) ||
+                    logical_growth > MAX_TOTAL_EXTRACT_SIZE - total_extracted)
+                {
+                    result.error_message = "Archive data exceeds its declared size or the configured extraction limit";
+                    result.success = false;
+                    archive_read_close(a);
+                    archive_read_free(a);
+                    archive_write_close(ext);
+                    archive_write_free(ext);
+                    return result;
+                }
+                // Unknown-size entries are charged by their highest logical
+                // endpoint, not just by the data stored in each sparse block.
+                total_extracted += logical_growth;
+                entry_logical_size += logical_growth;
                 auto wr = archive_write_data_block(ext, buff, size, offset);
                 if (wr < ARCHIVE_OK)
                 {
@@ -1031,7 +1154,7 @@ ExtractResult ic_extract(std::string_view archive, std::string_view output_dir)
                     return result;
                 }
                 entry_extracted += block_size;
-                total_extracted += block_size;
+                total_data_written += block_size;
             }
             if (read_status != ARCHIVE_EOF || archive_write_finish_entry(ext) < ARCHIVE_OK)
             {
@@ -1424,7 +1547,7 @@ CompressionFormat ic_detect_file(std::string_view path)
     FOPEN_IFSTREAM(in, path, std::ios::binary);
     if (!in) return CompressionFormat::Raw;
 
-    char buf[256];
+    char buf[512];
     in.read(buf, sizeof(buf));
     std::streamsize read = in.gcount();
     in.close();

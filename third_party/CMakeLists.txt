@@ -5,6 +5,7 @@ cmake_minimum_required(VERSION 3.18)
 # =============================================================================
 
 include(FetchContent)
+# Full history is required when GIT_TAG pins an arbitrary commit SHA.
 enable_language(C)
 
 if(POLICY CMP0169)
@@ -34,7 +35,7 @@ FetchContent_Declare(
     zlib
     GIT_REPOSITORY https://github.com/madler/zlib.git
     GIT_TAG 216c70c020aa53f0c40920d155f808b6b59c9acb
-    GIT_SHALLOW TRUE
+    GIT_SHALLOW FALSE
     GIT_PROGRESS TRUE
 )
 FetchContent_MakeAvailable(zlib)
@@ -50,7 +51,7 @@ FetchContent_Declare(
     bzip2
     GIT_REPOSITORY https://sourceware.org/git/bzip2.git
     GIT_TAG 75a94bea3918e612b879d6a11ca64b8689526147
-    GIT_SHALLOW TRUE
+    GIT_SHALLOW FALSE
     GIT_PROGRESS TRUE
 )
 FetchContent_GetProperties(bzip2)
@@ -100,7 +101,7 @@ FetchContent_Declare(
     zstd
     GIT_REPOSITORY https://github.com/facebook/zstd.git
     GIT_TAG ac66b19e6bd6b83238bf008eecc1298105298532
-    GIT_SHALLOW TRUE
+    GIT_SHALLOW FALSE
     GIT_PROGRESS TRUE
 )
 FetchContent_GetProperties(zstd)
@@ -127,7 +128,7 @@ FetchContent_Declare(
     lz4
     GIT_REPOSITORY https://github.com/lz4/lz4.git
     GIT_TAG ebb370ca83af193212df4dcbadcc5d87bc0de2f0
-    GIT_SHALLOW TRUE
+    GIT_SHALLOW FALSE
     GIT_PROGRESS TRUE
 )
 FetchContent_GetProperties(lz4)
@@ -161,7 +162,7 @@ FetchContent_Declare(
     xz
     GIT_REPOSITORY https://github.com/tukaani-project/xz.git
     GIT_TAG 9d0743bb9629e8a55ea7b1b40b981514a1f68408
-    GIT_SHALLOW TRUE
+    GIT_SHALLOW FALSE
     GIT_PROGRESS TRUE
 )
 FetchContent_GetProperties(xz)
@@ -219,7 +220,10 @@ FetchContent_Declare(
   libarchive
   GIT_REPOSITORY https://github.com/libarchive/libarchive.git
   GIT_TAG 24d992722659c529700143e3087dee6454addecd
-  GIT_SHALLOW TRUE
+  PATCH_COMMAND "${CMAKE_COMMAND}"
+    "-DLIBARCHIVE_SOURCE_DIR=<SOURCE_DIR>"
+    -P "${CMAKE_CURRENT_LIST_DIR}/patches/libarchive-lz4-empty.cmake"
+  GIT_SHALLOW FALSE
   GIT_PROGRESS TRUE
 )
 

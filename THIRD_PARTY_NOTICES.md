@@ -40,4 +40,12 @@ Revision: `24d992722659c529700143e3087dee6454addecd`
 
 Copyright (c) 2003-2018 the libarchive authors. The libarchive sources are primarily covered by the BSD 2-Clause license, with file-specific exceptions documented by the upstream project.
 
-The complete controlling license texts are distributed in each upstream source tree. When producing a binary release, `scripts/release.ps1` copies those exact license files into the package's `licenses` directory.
+The controlling license texts are distributed in each upstream source tree. When producing a binary release, `scripts/release.ps1` copies the upstream license files into the package's `licenses` directory. This includes XZ's `COPYING.0BSD` in addition to its license overview, and the complete libarchive compress reader/writer source files so their additional UC Regents notices and conditions are retained.
+
+## Local dependency modifications
+
+The libarchive revision above receives the patch in
+`third_party/patches/libarchive-lz4-empty.cmake`. It initializes the LZ4 stream
+descriptor and checksum state when closing an empty stream, preventing a null
+checksum-state access and producing a valid empty LZ4 frame. The build applies
+this patch automatically and fails if the expected upstream code has changed.

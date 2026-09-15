@@ -1,8 +1,9 @@
 #include <winver.h>
+#include "ICompression_version.h"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,0,1,0
- PRODUCTVERSION 1,0,1,0
+ FILEVERSION ICOMPRESSION_FILE_VERSION
+ PRODUCTVERSION ICOMPRESSION_FILE_VERSION
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS VS_FF_DEBUG
@@ -19,12 +20,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Mionumbra\0"
             VALUE "FileDescription", "ICompression GameMaker Extension\0"
-            VALUE "FileVersion", "1.0.1.0\0"
+            VALUE "FileVersion", ICOMPRESSION_FILE_VERSION_STRING
             VALUE "InternalName", "ICompression\0"
             VALUE "LegalCopyright", "Copyright (c) 2026 Mionumbra\0"
             VALUE "OriginalFilename", "ICompression.dll\0"
             VALUE "ProductName", "ICompression\0"
-            VALUE "ProductVersion", "1.0.1.0\0"
+            VALUE "ProductVersion", ICOMPRESSION_FILE_VERSION_STRING
         END
     END
     BLOCK "VarFileInfo"
