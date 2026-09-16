@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.3.2 — Pre-release (2026-09-16)
+
+- Automatically increment the fourth version field after each successful DLL link, including local builds.
+- Keep counters outside build directories; share them between configurations and build trees, and start new functional versions at build 1.
+- Preserve the counter on failed and unchanged builds, and reject missing or corrupt recorded state.
+- Add DLL build receipts with version, hash and source provenance; package existing artifacts with `-OnlyPackage` without increasing the count.
+- Update staged extension versions through ResourceTool MCP while preserving source resource files.
+
 ## 1.0.3.1 — Pre-release (2026-09-15)
 
 - Count sparse file holes toward extraction limits before creating or extending output files.

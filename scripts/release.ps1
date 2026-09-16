@@ -4,7 +4,9 @@ param(
     [string]$Version,
     [string]$Generator = "Visual Studio 18 2026",
     [string]$BuildDirectory,
-    [string]$GameMakerCacheDirectory
+    [string]$GameMakerCacheDirectory,
+    [switch]$OnlyPackage,
+    [string]$ResourceToolPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -66,30 +68,35 @@ function Get-ExtensionAbi($Extension) {
     }) | ConvertTo-Json -Depth 20 -Compress
 }
 
-# Reject invalid versions and unsafe destinations before generation or writes.
-# Preserve all four user-defined project.version1.version2.build fields.
+function Assert-Version([string]$Value, [string]$Label) {
+    if ($Value -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+        throw "$Label must use project.version1.version2.build: $Value"
+    }
+    foreach ($part in $Value.Split('.')) {
+        if ($part.Length -gt 5 -or [int]$part -gt 65535) { throw 'Version components must be at most 65535' }
+    }
+}
+
+function Get-VersionBase([string]$Value) { return ($Value.Split('.')[0..2] -join '.') }
+
+# Source metadata owns the first three fields. Its fourth field is a historical
+# seed; only a successful DLL build owns the compiled fourth field.
 $extensionText = Get-Content -Raw -LiteralPath $extensionPath
 $versionFields = [regex]::Matches($extensionText, '"extensionVersion"\s*:\s*"([^"]*)"')
 if ($versionFields.Count -ne 1) { throw "Expected exactly one extensionVersion in $extensionPath" }
 $sourceVersion = $versionFields[0].Groups[1].Value
-if ($sourceVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
-    throw "extensionVersion must use project.version1.version2.build: $sourceVersion"
+Assert-Version $sourceVersion 'extensionVersion'
+$sourceBase = Get-VersionBase $sourceVersion
+$requestedVersion = $Version
+if ($PSBoundParameters.ContainsKey('Version')) {
+    Assert-Version $requestedVersion 'Version'
+    if ((Get-VersionBase $requestedVersion) -cne $sourceBase) { throw "Version must match source base $sourceBase" }
 }
-foreach ($part in $sourceVersion.Split('.')) {
-    if ($part.Length -gt 5 -or [int]$part -gt 65535) { throw "Version components must be at most 65535" }
-}
-if ($PSBoundParameters.ContainsKey('Version') -and $Version -cne $sourceVersion) {
-    throw "Version must match extensionVersion $sourceVersion; received '$Version'"
-}
-$Version = $sourceVersion
 $extension = $extensionText | ConvertFrom-Json
-$stage = Assert-ChildPath (Join-Path $root "release\ICompression-$Version-windows-x64") (Join-Path $root 'release')
-$archive = "$stage.zip"
-$reuseBuild = $PSBoundParameters.ContainsKey('BuildDirectory')
-$workspace = Read-ToolOutput 'git' @('-C', $root, 'rev-parse', '--show-toplevel')
-$workspace = [IO.Path]::GetFullPath($workspace)
-if ($reuseBuild -and [string]::IsNullOrWhiteSpace($BuildDirectory)) { throw 'BuildDirectory must not be empty' }
-$build = Assert-ChildPath $(if ($reuseBuild) { $BuildDirectory } else { Join-Path $root 'out\release-build' }) $workspace
+$workspace = [IO.Path]::GetFullPath((Read-ToolOutput 'git' @('-C', $root, 'rev-parse', '--show-toplevel')))
+$explicitBuild = $PSBoundParameters.ContainsKey('BuildDirectory')
+if ($explicitBuild -and [string]::IsNullOrWhiteSpace($BuildDirectory)) { throw 'BuildDirectory must not be empty' }
+$build = Assert-ChildPath $(if ($explicitBuild) { $BuildDirectory } else { Join-Path $root 'out\release-build' }) $workspace
 if ($build -ieq $root) { throw 'BuildDirectory must not be the source directory' }
 if ($PSBoundParameters.ContainsKey('GameMakerCacheDirectory')) {
     if ([string]::IsNullOrWhiteSpace($GameMakerCacheDirectory)) { throw 'GameMakerCacheDirectory must not be empty' }
@@ -98,17 +105,25 @@ if ($PSBoundParameters.ContainsKey('GameMakerCacheDirectory')) {
         throw "GameMakerCacheDirectory must be an existing cache directory: $GameMakerCacheDirectory"
     }
 }
+if ($PSBoundParameters.ContainsKey('ResourceToolPath')) {
+    if ([string]::IsNullOrWhiteSpace($ResourceToolPath)) { throw 'ResourceToolPath must not be empty' }
+    $ResourceToolPath = [IO.Path]::GetFullPath($ResourceToolPath, $root)
+    if (!(Test-Path -LiteralPath $ResourceToolPath -PathType Leaf)) { throw "ResourceToolPath does not exist: $ResourceToolPath" }
+}
 $cachePath = Join-Path $build 'CMakeCache.txt'
-if ($reuseBuild) {
-    if (!(Test-Path -LiteralPath $cachePath -PathType Leaf)) { throw "BuildDirectory must be an existing configured CMake tree: $build" }
+if (Test-Path -LiteralPath $cachePath -PathType Leaf) {
     $cache = Get-Content -Raw -LiteralPath $cachePath
     $cachedSource = Read-CacheValue $cache 'CMAKE_HOME_DIRECTORY'
     if (!$cachedSource -or [IO.Path]::GetFullPath($cachedSource).TrimEnd('\', '/') -ine $root) {
         throw "BuildDirectory belongs to a different source directory: $cachedSource"
     }
-    if ((Read-CacheValue $cache 'CMAKE_GENERATOR') -cne $Generator) { throw "BuildDirectory generator does not match $Generator" }
+    if (!$OnlyPackage -and (Read-CacheValue $cache 'CMAKE_GENERATOR') -cne $Generator) { throw "BuildDirectory generator does not match $Generator" }
 }
+elseif ($explicitBuild -or $OnlyPackage) { throw "BuildDirectory must be an existing configured CMake tree: $build" }
 
+$extgenVersion = $null
+$cmakeVersion = $null
+if (!$OnlyPackage) {
 # extgen exposes its version through the supported help command; --version exits 1.
 $extgenOutput = Read-ToolOutput 'extgen' @('--help')
 $extgenMatch = [regex]::Match($extgenOutput, '\bextgen (v1\.(?:d8c68bd|225bddc))\b')
@@ -122,8 +137,12 @@ $minimumCmake = if ($Generator -eq 'Visual Studio 18 2026') { [version]'4.2' } e
 if ([version]$cmakeVersion -lt $minimumCmake) { throw "$Generator requires CMake $minimumCmake or newer" }
 $capabilities = Read-ToolOutput 'cmake' @('-E', 'capabilities') | ConvertFrom-Json
 if ($Generator -cnotin @($capabilities.generators.name)) { throw "Installed CMake does not support generator: $Generator" }
+}
 $gmCliVersion = Read-ToolOutput 'gm-cli' @('--version')
 $gitVersion = Read-ToolOutput 'git' @('--version')
+$nodeVersion = Read-ToolOutput 'node' @('--version')
+
+if (!$OnlyPackage) {
 
 # Generate extension metadata into a temporary copy and compare its ABI. This
 # keeps the checked-in .yy untouched while detecting stale native declarations.
@@ -149,28 +168,47 @@ finally {
     Remove-ReleaseDirectory $generationDir $root
 }
 
-if (!$reuseBuild) { Remove-ReleaseDirectory $build $workspace }
 $configureArgs = @('-S', $root, '-B', $build, '-G', $Generator, '-DCMAKE_BUILD_TYPE=Release',
     '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL', "-DEXT_OUTPUT_DIR=$root\project\extensions\ICompression")
 if ($Generator -like 'Visual Studio *') { $configureArgs += @('-A', 'x64') }
 & cmake @configureArgs
 if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed' }
 $buildArgs = @('--build', $build, '--config', 'Release')
-if ($reuseBuild) { $buildArgs += '--clean-first' }
 & cmake @buildArgs
 if ($LASTEXITCODE -ne 0) { throw 'CMake build failed' }
+}
 
 $dllPath = Join-Path $root 'project\extensions\ICompression\ICompression.dll'
-$dllVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($dllPath)
-if ($dllVersion.FileVersion -cne $Version -or $dllVersion.ProductVersion -cne $Version) {
-    throw "DLL version does not match extensionVersion $Version"
+$receiptPath = "$dllPath.build.json"
+if (!(Test-Path -LiteralPath $dllPath -PathType Leaf)) { throw "Compiled DLL is missing: $dllPath" }
+if (!(Test-Path -LiteralPath $receiptPath -PathType Leaf)) { throw "DLL build receipt is missing: $receiptPath" }
+$receipt = Get-Content -Raw -LiteralPath $receiptPath | ConvertFrom-Json
+Assert-Version $receipt.version 'Compiled version'
+$Version = $receipt.version
+if ($receipt.schema_version -ne 1 -or $receipt.base_version -cne $sourceBase -or
+    (Get-VersionBase $Version) -cne $sourceBase -or
+    $receipt.build_number -ne [int]$Version.Split('.')[3]) { throw 'DLL build receipt version/base is inconsistent' }
+if ($receipt.configuration -cne 'Release') { throw 'Only a Release DLL may be packaged' }
+if ($receipt.source_revision -notmatch '^[0-9a-fA-F]{40}$' -or
+    $receipt.source_has_local_changes -isnot [bool] -or
+    [string]::IsNullOrWhiteSpace($receipt.cxx_compiler) -or [string]::IsNullOrWhiteSpace($receipt.generator)) {
+    throw 'DLL build receipt is missing valid source/compiler provenance'
 }
+$buildTimestamp = [DateTimeOffset]::MinValue
+if (![DateTimeOffset]::TryParse($receipt.built_at_utc, [ref]$buildTimestamp)) { throw 'DLL build receipt timestamp is invalid' }
+if ($requestedVersion -and $requestedVersion -cne $Version) { throw "Version must match compiled DLL $Version; received '$requestedVersion'" }
+$dllHash = (Get-FileHash -LiteralPath $dllPath -Algorithm SHA256).Hash
+if ($receipt.sha256 -cnotmatch '^[0-9A-F]{64}$' -or $receipt.sha256 -cne $dllHash) { throw 'DLL build receipt SHA-256 does not match the DLL' }
+$dllVersion = (Get-Item -LiteralPath $dllPath).VersionInfo
+if ($dllVersion.FileVersion -cne $Version -or $dllVersion.ProductVersion -cne $Version) { throw 'DLL version does not match its build receipt' }
 $dllBytes = [IO.File]::ReadAllBytes($dllPath)
+if ($dllBytes.Length -lt 64) { throw 'Release DLL is not a valid PE file' }
 $peOffset = [BitConverter]::ToInt32($dllBytes, 0x3c)
-if ($peOffset -lt 0 -or $peOffset + 6 -gt $dllBytes.Length -or
+if ($peOffset -lt 0 -or [long]$peOffset + 6 -gt $dllBytes.Length -or
     [BitConverter]::ToUInt32($dllBytes, $peOffset) -ne 0x4550 -or
     [BitConverter]::ToUInt16($dllBytes, $peOffset + 4) -ne 0x8664) { throw 'Release DLL is not Windows x64' }
-
+$stage = Assert-ChildPath (Join-Path $root "release\ICompression-$Version-windows-x64") (Join-Path $root 'release')
+$archive = "$stage.zip"
 # --runtime=vm chooses the runner type; omit any runtime-version override so
 # gm-cli uses the user's configured/default GameMaker runtime.
 $testLog = Join-Path $build 'gamemaker-tests.log'
@@ -211,6 +249,43 @@ foreach ($relative in $files) {
     Copy-Item -LiteralPath $source -Destination $destination
 }
 
+# ResourceTool needs the complete project context. Copy tracked resources from
+# this source tree and add generated runtime files; local settings/cache stay out.
+$resourceTemp = Assert-ChildPath (Join-Path $root ('out\release-resources-' + [guid]::NewGuid().ToString('N'))) $root
+try {
+    $trackedProject = Read-ToolOutput 'git' @('-C', $workspace, '-c', 'core.quotepath=false', 'ls-files', '--', 'project')
+    $resourceFiles = @($trackedProject -split "`r?`n" | Where-Object {
+        $_ -and $_ -notmatch '(^|/)(\.git|\.gmcache|\.mcp\.json|AGENTS\.md|CLAUDE\.md|gm-options\.json)(/|$)'
+    })
+    if ('project/ICompression.yyp' -cnotin $resourceFiles) { throw 'Tracked GameMaker project manifest is missing' }
+    $resourceFiles = @($resourceFiles + @($files | Where-Object { $_ -like 'project\*' })) | Sort-Object -Unique
+    foreach ($relative in $resourceFiles) {
+        $resourceSource = Assert-ChildPath (Join-Path $root $relative) $root
+        if (!(Test-Path -LiteralPath $resourceSource -PathType Leaf)) { throw "Missing project resource: $relative" }
+        $resourceDestination = Assert-ChildPath (Join-Path $resourceTemp $relative) $resourceTemp
+        New-Item -ItemType Directory -Path (Split-Path -Parent $resourceDestination) -Force | Out-Null
+        Copy-Item -LiteralPath $resourceSource -Destination $resourceDestination
+    }
+    $resourceCache = if ($GameMakerCacheDirectory) { $GameMakerCacheDirectory } else { Join-Path $root 'project\.gmcache' }
+    $resourceArgs = @((Join-Path $PSScriptRoot 'set-extension-version.cjs'), '--project', (Join-Path $resourceTemp 'project\ICompression.yyp'),
+        '--version', $Version, '--cache-dir', $resourceCache)
+    if ($ResourceToolPath) { $resourceArgs += @('--resource-tool', $ResourceToolPath) }
+    & node @resourceArgs
+    if ($LASTEXITCODE -ne 0) { throw 'ResourceTool failed to set the staged extension version' }
+    $updatedExtensionPath = Join-Path $resourceTemp 'project\extensions\ICompression\ICompression.yy'
+    $updatedExtension = Get-Content -Raw -LiteralPath $updatedExtensionPath | ConvertFrom-Json
+    if ($updatedExtension.extensionVersion -cne $Version -or (Get-ExtensionAbi $extension) -cne (Get-ExtensionAbi $updatedExtension)) {
+        throw 'ResourceTool changed the extension ABI or failed to set the compiled version'
+    }
+    Copy-Item -LiteralPath $updatedExtensionPath -Destination (Join-Path $stage 'project\extensions\ICompression\ICompression.yy')
+}
+finally { Remove-ReleaseDirectory $resourceTemp $root }
+
+# Detect concurrent builds or artifact replacement while the tests/staging ran.
+if ((Get-FileHash -LiteralPath $dllPath -Algorithm SHA256).Hash -cne $dllHash -or
+    (Get-FileHash -LiteralPath (Join-Path $stage 'project\extensions\ICompression\ICompression.dll') -Algorithm SHA256).Hash -cne $dllHash) {
+    throw 'DLL changed during release; rerun against the completed build'
+}
 $licenses = [ordered]@{
     'zlib-LICENSE.txt' = 'zlib-src\LICENSE'
     'bzip2-LICENSE.txt' = 'bzip2-src\LICENSE'
@@ -230,28 +305,26 @@ foreach ($item in $licenses.GetEnumerator()) {
     Copy-Item -LiteralPath $source -Destination (Join-Path $licenseDir $item.Key)
 }
 
-$revision = Read-ToolOutput 'git' @('-C', $root, 'rev-parse', '--verify', 'HEAD')
-$dirty = (Read-ToolOutput 'git' @('-C', $root, 'status', '--porcelain', '--untracked-files=normal')).Length -gt 0
 $runtimeVersions = @([regex]::Matches($testOutput, 'runtime-([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)') |
     ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
-$compilerInfo = Get-ChildItem -LiteralPath (Join-Path $build 'CMakeFiles') -Filter CMakeCXXCompiler.cmake -Recurse |
-    Select-Object -First 1 | Get-Content -Raw
-$compilerVersion = [regex]::Match($compilerInfo, 'set\(CMAKE_CXX_COMPILER_VERSION "([^"]+)"\)').Groups[1].Value
-$cache = Get-Content -Raw -LiteralPath $cachePath
 [ordered]@{
     extension_version = $Version
-    source_revision = $revision
-    source_has_local_changes = $dirty
-    built_at_utc = [DateTime]::UtcNow.ToString('o')
+    base_version = $receipt.base_version
+    build_number = $receipt.build_number
+    dll_sha256 = $dllHash
+    source_revision = $receipt.source_revision
+    source_has_local_changes = $receipt.source_has_local_changes
+    built_at_utc = $receipt.built_at_utc
+    packaged_at_utc = [DateTime]::UtcNow.ToString('o')
+    only_package = [bool]$OnlyPackage
     tools = [ordered]@{ extgen = $extgenVersion; cmake = $cmakeVersion; gm_cli = $gmCliVersion
-        powershell = $PSVersionTable.PSVersion.ToString(); git = $gitVersion; cxx_compiler = $compilerVersion }
-    generator = $Generator
+        node = $nodeVersion; powershell = $PSVersionTable.PSVersion.ToString(); git = $gitVersion; cxx_compiler = $receipt.cxx_compiler }
+    generator = $receipt.generator
+    configuration = $receipt.configuration
     platform = 'windows-x64'
-    visual_studio_toolset = Read-CacheValue $cache 'CMAKE_VS_PLATFORM_TOOLSET'
     gamemaker_runtime_versions = $runtimeVersions
     tests = [ordered]@{ total = [int]$summaries[-1].Groups[1].Value; passed = [int]$summaries[-1].Groups[2].Value; failed = 0 }
 } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $stage 'build-info.json') -Encoding utf8NoBOM
-
 Get-ChildItem -LiteralPath $stage -Recurse -File | Sort-Object FullName |
     Get-FileHash -Algorithm SHA256 |
     ForEach-Object { "$($_.Hash)  $($_.Path.Substring($stage.Length + 1).Replace('\', '/'))" } |

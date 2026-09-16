@@ -25,3 +25,6 @@ docs/documentation.json
 *.exp
 *.ilk
 *.pdb
+
+/.build-state/
+*.dll.build.json

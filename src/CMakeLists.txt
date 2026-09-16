@@ -1,6 +1,7 @@
 set(SRC_DIR ${CMAKE_CURRENT_LIST_DIR})
 
-# Extension metadata is the single source for the DLL and package version.
+# Extension metadata defines the three-field functional version and bootstrap count.
+# The post-build counter assigns the actual fourth field after successful linking.
 # Four fields follow project.version1.version2.build; this is not semantic versioning.
 set(IC_EXTENSION_METADATA "${CMAKE_SOURCE_DIR}/project/extensions/ICompression/ICompression.yy")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${IC_EXTENSION_METADATA}")
@@ -29,6 +30,16 @@ endforeach()
 configure_file("${SRC_DIR}/native/ICompression_version.h.in"
     "${CMAKE_CURRENT_BINARY_DIR}/ICompression_version.h" @ONLY)
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+
+if(WIN32)
+  set(IC_BUILD_STATE_DIR "${CMAKE_SOURCE_DIR}/.build-state" CACHE PATH
+      "Persistent build counters shared by this checkout's build directories")
+  include("${SRC_DIR}/build-counter.cmake")
+  ic_enable_build_counter(${PROJECT_NAME}
+    METADATA "${IC_EXTENSION_METADATA}"
+    STATE_DIRECTORY "${IC_BUILD_STATE_DIR}"
+    SOURCE_DIRECTORY "${CMAKE_SOURCE_DIR}")
+endif()
 
 
 # =============================================================================

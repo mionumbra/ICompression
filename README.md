@@ -7,7 +7,7 @@ ICompression is a native compression, decompression, and archive extension for G
 - Platform: Windows x64
 - GameMaker: tested with IDE 2026.0.0.16 and Runtime 2026.0.0.23
 - Runner: Windows VM tested; YYC requires a configured GameMaker C++ toolchain
-- Extension version: 1.0.3.1 (defined by `extensionVersion` in `project/extensions/ICompression/ICompression.yy`)
+- Functional version: 1.0.3; CMake assigns the fourth field on each successful DLL build (see Building below).
 
 Supported stream filters are gzip, bzip2, zstd, LZ4, and xz. ZIP, 7z, and tar archives can be created and read. RAR is detection/read-only through libarchive; RAR creation is not supported.
 
@@ -117,9 +117,15 @@ Create a local release ZIP with:
 pwsh -File "scripts/release.ps1"
 ```
 
-Version tags use `v<project>.<version1>.<version2>.<build>` (项目版本.版本号1.版本号2.编译次数). All four numeric fields are preserved in the extension metadata, DLL version, and package name; the leading `v` is used only for the Git tag.
+Version tags use `v<project>.<version1>.<version2>.<build>` (项目版本.版本号1.版本号2.编译次数). Project version `1` stays fixed; the next two fields identify the functional version. The fourth field counts successful DLL builds in this checkout, including local development builds. The leading `v` is used only for the Git tag.
 
-The extension `.yy` is the version source for both the DLL resource and package name. The optional `-Version` argument must match it exactly. The script checks tools and paths before generation, compares regenerated extension declarations without rewriting the checked-in `.yy`, creates a fresh `out/release-build` tree, builds the DLL, verifies its version and x64 architecture, and runs the complete VM test suite. Both the process exit status and a successful, nonempty test summary are required. GameMaker uses the runtime selected by the user's gm-cli configuration; the script does not pin a runtime version.
+CMake assigns the build number after a successful link. An unchanged build or a failed compilation does not increment it; a clean rebuild does. Debug/Release and different build directories for the same source checkout share the counter. Each new three-field base starts at build 1; returning to an older base resumes its recorded count to avoid duplicate numbers. On first adoption, the fourth field in the checked-in extension metadata is used as the existing build count, so the next build after `1.0.3.1` is `1.0.3.2`.
+
+Counter state lives in `.build-state/counter.json`, outside `out/`, and survives clearing build directories. Back up `.build-state` when moving the checkout; it is local state, not synchronized between separate clones or computers. `IC_BUILD_STATE_DIR` can explicitly select a shared persistent location. Do not delete it to reset numbers: missing state with existing build receipts and corrupt state both stop the build. Increase the functional version instead. Counts cannot reconstruct builds made before this mechanism was enabled.
+
+The source extension `.yy` supplies the first three fields and the bootstrap count. It is not rewritten after each compilation. The compiled DLL and its `.dll.build.json` receipt record the actual full version and SHA-256. Packaging checks the receipt and uses GameMaker's resource tool to set the staged extension metadata to that version. DLL, packaged extension, package filename and build information therefore agree. The optional `-Version` argument must match the compiled DLL's complete version.
+
+The release script uses incremental builds, verifies the DLL version and x64 architecture, and runs the complete VM test suite. Both the process exit status and a successful, nonempty test summary are required. GameMaker uses the runtime selected by the user's gm-cli configuration; the script does not pin a runtime version.
 
 To reuse an existing CMake tree and its downloaded dependencies:
 
@@ -127,7 +133,15 @@ To reuse an existing CMake tree and its downloaded dependencies:
 pwsh -File "scripts/release.ps1" -BuildDirectory "out/release-build"
 ```
 
-The selected tree must be within the Git workspace and already configured for the same source directory and generator. The script uses `--clean-first` to rebuild it. A source copy may use a matching sibling build directory within the workspace. `-GameMakerCacheDirectory "project/.gmcache"` optionally shares an existing GameMaker cache within the workspace; cache credentials are never packaged. CI may pass another installed generator with `-Generator`; CMake 3.21 or newer is sufficient for Visual Studio 2022.
+The selected tree must be within the Git workspace and already configured for the same source directory and generator. A source copy may use a matching sibling build directory within the workspace. `-GameMakerCacheDirectory "project/.gmcache"` optionally shares an existing GameMaker cache within the workspace; cache credentials are never packaged. CI may pass another installed generator with `-Generator`; CMake 3.21 or newer is sufficient for Visual Studio 2022.
+
+To package an existing Release DLL without generating or compiling anything, use:
+
+```powershell
+pwsh -File "scripts/release.ps1" -OnlyPackage -BuildDirectory "out/release-build"
+```
+
+This still verifies the DLL receipt and runs VM tests; the build count remains unchanged. `-ResourceToolPath` may select an already installed official `ResourceTool.exe`; otherwise gm-cli starts the resource MCP. The staged project is temporary and the source `.yy` is left untouched. Normal release generation can rewrite generated source files and cause a real rebuild; use `-OnlyPackage` when reusing an existing build is intended.
 
 The staged bundle and ZIP are written under `release/`; nothing is uploaded. The bundle includes dependency license texts, `build-info.json` with source revision, tool/compiler versions, the GameMaker runtime used, and test counts, plus SHA-256 checksums. A separate `.zip.sha256` checks the complete archive. Timestamps and compiler output mean repeated builds are not promised to produce identical ZIP bytes.
 
@@ -135,6 +149,12 @@ Run isolated release preflight checks without compiling or running GameMaker:
 
 ```powershell
 pwsh -File "scripts/test-release-preflight.ps1"
+```
+
+Exercise automatic numbering with small, real CMake/MSVC builds (including failure, clean rebuild, another build directory, and version reset):
+
+```powershell
+pwsh -File "scripts/test-build-counter.ps1"
 ```
 
 For development iteration against an already configured build tree:
