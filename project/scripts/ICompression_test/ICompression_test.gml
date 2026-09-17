@@ -1125,6 +1125,47 @@ function __test_tar_octal(_buffer, _offset, _width, _value)
     buffer_poke(_buffer, _offset + _width - 1, buffer_u8, 0);
 }
 
+// Hand-crafted tar with caller-controlled entry names, typeflags, and link
+// targets. Each entry is one 512-byte header plus its data padded to whole
+// 512-byte blocks; two zero blocks terminate the archive.
+function __test_raw_tar(_context, _filename, _entries)
+{
+    var _path = _context.directory + "/" + _filename;
+    array_push(_context.files, _path);
+    var _blocks = 2;
+    for (var _entry_index = 0; _entry_index < array_length(_entries); ++_entry_index) {
+        _blocks += 1 + ceil(string_byte_length(_entries[_entry_index].data) / 512);
+    }
+    var _archive = __test_buffer(_context, _blocks * 512);
+    buffer_fill(_archive, 0, buffer_u8, 0, buffer_get_size(_archive));
+    var _offset = 0;
+    for (var _entry_index = 0; _entry_index < array_length(_entries); ++_entry_index) {
+        var _entry = _entries[_entry_index];
+        var _size = string_byte_length(_entry.data);
+        __test_assert(string_byte_length(_entry.name) < 100 && string_byte_length(_entry.linkname) < 100, "tar fixture field fits");
+        __test_tar_ascii(_archive, _offset, _entry.name);
+        __test_tar_octal(_archive, _offset + 100, 8, 420); // 0644
+        __test_tar_octal(_archive, _offset + 108, 8, 0);
+        __test_tar_octal(_archive, _offset + 116, 8, 0);
+        __test_tar_octal(_archive, _offset + 124, 12, _size);
+        __test_tar_octal(_archive, _offset + 136, 12, 0);
+        for (var _index = 148; _index < 156; ++_index) buffer_poke(_archive, _offset + _index, buffer_u8, 32);
+        buffer_poke(_archive, _offset + 156, buffer_u8, _entry.typeflag);
+        __test_tar_ascii(_archive, _offset + 157, _entry.linkname);
+        __test_tar_ascii(_archive, _offset + 257, "ustar  "); // trailing NUL remains zero
+        var _checksum = 0;
+        for (var _index = 0; _index < 512; ++_index) _checksum += buffer_peek(_archive, _offset + _index, buffer_u8);
+        __test_tar_octal(_archive, _offset + 148, 7, _checksum);
+        buffer_poke(_archive, _offset + 155, buffer_u8, 32);
+        _offset += 512;
+        __test_tar_ascii(_archive, _offset, _entry.data);
+        _offset += ceil(_size / 512) * 512;
+    }
+    buffer_save(_archive, _path);
+    __test_assert(file_exists(_path), "tar fixture saved: " + _filename);
+    return _path;
+}
+
 function __test_sparse_tar(_context, _prefix, _logical_size, _count)
 {
     var _path = _context.directory + "/" + _prefix + ".tar";
@@ -1236,6 +1277,183 @@ function test_sparse_extraction_limits()
         __test_assert(!file_exists(_excess.outputs[4]), "fifth sparse file rejected before creation");
     });
 }
+
+// Full extraction rejects link entries, special files, and unsafe names before
+// writing anything (ICompression_native.cpp :246-274, :1061-1076).
+function test_extract_rejects_unsafe_entries()
+{
+    return __test_with_resources("test_extract_rejects_unsafe_entries", function(_context) {
+        var _out = _context.directory + "/out";
+        directory_create(_out);
+        var _cases = [
+            { key: "symlink", name: "link.txt", typeflag: ord("2"), linkname: "target.txt", data: "", blocked_file: _out + "/link.txt", blocked_dir: "", blocked_outside: "" },
+            { key: "hardlink", name: "hard.txt", typeflag: ord("1"), linkname: "target.txt", data: "", blocked_file: _out + "/hard.txt", blocked_dir: "", blocked_outside: "" },
+            { key: "chardev", name: "device.txt", typeflag: ord("3"), linkname: "", data: "", blocked_file: _out + "/device.txt", blocked_dir: "", blocked_outside: "" },
+            { key: "fifo", name: "pipe.txt", typeflag: ord("6"), linkname: "", data: "", blocked_file: _out + "/pipe.txt", blocked_dir: "", blocked_outside: "" },
+            { key: "dotdot", name: "../evil.txt", typeflag: ord("0"), linkname: "", data: "evil", blocked_file: _out + "/evil.txt", blocked_dir: "", blocked_outside: _context.directory + "/evil.txt" },
+            { key: "dotdot_backslash", name: ".." + chr(92) + "evil.txt", typeflag: ord("0"), linkname: "", data: "evil", blocked_file: _out + "/evil.txt", blocked_dir: "", blocked_outside: _context.directory + "/evil.txt" },
+            { key: "absolute", name: "/abs/evil.txt", typeflag: ord("0"), linkname: "", data: "evil", blocked_file: _out + "/abs/evil.txt", blocked_dir: _out + "/abs", blocked_outside: "" },
+        ];
+        for (var _index = 0; _index < array_length(_cases); ++_index) {
+            var _unsafe = _cases[_index];
+            var _path = __test_raw_tar(_context, "unsafe_" + _unsafe.key + ".tar", [_unsafe]);
+            var _listing = ic_list_page(_path, 0);
+            __test_assert(_listing.success && array_length(_listing.entries) == 1, _unsafe.key + ": fixture lists one entry: " + _listing.error_message);
+            var _result = ic_extract(_path, _out);
+            __test_assert(!_result.success, _unsafe.key + ": extraction rejected");
+            __test_assert(_result.files_extracted == 0, _unsafe.key + ": nothing extracted, got " + string(_result.files_extracted));
+            __test_assert(string_pos("unsafe entry", _result.error_message) > 0, _unsafe.key + ": unsafe-entry error, got " + _result.error_message);
+            __test_assert(!file_exists(_unsafe.blocked_file), _unsafe.key + ": no file materialized");
+            if (_unsafe.blocked_dir != "") __test_assert(!directory_exists(_unsafe.blocked_dir), _unsafe.key + ": no directory materialized");
+            if (_unsafe.blocked_outside != "") __test_assert(!file_exists(_unsafe.blocked_outside), _unsafe.key + ": nothing written outside the output directory");
+        }
+        // Entries written before the unsafe one stay on disk: the abort leaves
+        // earlier successes in place (ICompression_native.cpp :1068-1075).
+        var _mixed = __test_raw_tar(_context, "unsafe_mixed.tar", [
+            { name: "sub/ok.txt", typeflag: ord("0"), linkname: "", data: "safe content" },
+            { name: "link.txt", typeflag: ord("2"), linkname: "target.txt", data: "" }
+        ]);
+        var _mixed_result = ic_extract(_mixed, _out);
+        __test_assert(!_mixed_result.success && _mixed_result.files_extracted == 1, "abort after a valid entry keeps its count");
+        __test_assert(string_pos("unsafe entry", _mixed_result.error_message) > 0, "mixed archive reports the unsafe entry: " + _mixed_result.error_message);
+        __test_assert(file_exists(_out + "/sub/ok.txt"), "entry extracted before the unsafe one remains");
+        __test_assert(!file_exists(_out + "/link.txt"), "unsafe entry after a valid one is not created");
+        // Control: the same fixture style extracts a safe nested name.
+        var _control = __test_raw_tar(_context, "safe_control.tar", [
+            { name: "sub/ok2.txt", typeflag: ord("0"), linkname: "", data: "safe content" }
+        ]);
+        var _control_result = ic_extract(_control, _out);
+        __test_assert(_control_result.success && _control_result.files_extracted == 1, "control nested entry extracts: " + _control_result.error_message);
+        var _control_file = file_text_open_read(_out + "/sub/ok2.txt");
+        var _control_text = file_text_read_string(_control_file);
+        file_text_close(_control_file);
+        __test_assert(_control_text == "safe content", "control content round-trips");
+    });
+}
+
+// MAX_ENTRY_PATH_SIZE (4096) bounds the archive entry path alone; output_dir is
+// not part of the measurement (ICompression_native.cpp :29, :1059-1062).
+function test_extract_entry_path_limit()
+{
+    return __test_with_resources("test_extract_entry_path_limit", function(_context) {
+        var _long_name = string_repeat("b", 4097);
+        var _handle = __test_writer(_context, "long_extract.zip", CompressionFormat.Zip);
+        __test_assert(ic_add_data(_handle, _long_name, "x"), "long entry name added");
+        __test_close_writer(_context, _handle);
+        var _out = _context.directory + "/out_long";
+        directory_create(_out);
+        var _result = ic_extract(_context.directory + "/long_extract.zip", _out);
+        __test_assert(!_result.success, "entry path over 4096 bytes rejected");
+        __test_assert(_result.files_extracted == 0, "long-path entry extracted nothing");
+        __test_assert(string_pos("unsafe entry", _result.error_message) > 0, "long path reports unsafe entry: " + string_copy(_result.error_message, 1, 48));
+        // file_exists() on a >4096-char path crashes the Windows VM outright
+        // (runner bug, reproduced: access violation), so prove the output
+        // directory stayed empty through a short wildcard instead.
+        var _found = file_find_first(_out + "/*", fa_directory);
+        file_find_close();
+        __test_assert(_found == "", "no long-path file materialized");
+    });
+}
+
+// Listing fails on entry paths over 256 UTF-8 bytes; 256 bytes still lists, and
+// entries skipped by the page offset are never name-checked
+// (ICompression_native.cpp :30, :966-982).
+function test_list_page_long_entry_path()
+{
+    return __test_with_resources("test_list_page_long_entry_path", function(_context) {
+        var _long_name = string_repeat("a", 257);
+        var _handle = __test_writer(_context, "long_list.zip", CompressionFormat.Zip);
+        __test_assert(ic_add_data(_handle, _long_name, "x"), "long entry name added");
+        __test_assert(ic_add_data(_handle, "normal.txt", "y"), "normal entry added");
+        __test_close_writer(_context, _handle);
+        var _path = _context.directory + "/long_list.zip";
+        var _page = ic_list_page(_path, 0);
+        __test_assert(!_page.success, "listing a 257-byte entry path fails");
+        __test_assert(array_length(_page.entries) == 0, "failed listing returns no entries");
+        __test_assert(string_pos("too long to list", _page.error_message) > 0, "long path reports the listing limit: " + _page.error_message);
+        var _skipped = ic_list_page(_path, 1);
+        __test_assert(_skipped.success, "offset-skipped long entry is not name-checked: " + _skipped.error_message);
+        __test_assert(array_length(_skipped.entries) == 1 && _skipped.entries[0].filename == "normal.txt", "only the normal entry lists after the skip");
+        var _edge_handle = __test_writer(_context, "list_edge.zip", CompressionFormat.Zip);
+        __test_assert(ic_add_data(_edge_handle, string_repeat("c", 256), "z"), "boundary entry name added");
+        __test_close_writer(_context, _edge_handle);
+        var _edge = ic_list_page(_context.directory + "/list_edge.zip", 0);
+        __test_assert(_edge.success && array_length(_edge.entries) == 1, "256-byte entry path lists: " + _edge.error_message);
+        __test_assert(string_byte_length(_edge.entries[0].filename) == 256, "boundary entry name preserved");
+    });
+}
+
+// 65,535 entries scan cleanly; the 65,536th header trips MAX_ARCHIVE_ENTRIES,
+// surfaced by ic_list_page as a dedicated error (ICompression_native.cpp :28,
+// :951-954). ic_extract enforces the same bound via the unsafe-entry path
+// (:1061); that variant is not exercised to avoid writing 65,535 files.
+function test_entry_scan_limit()
+{
+    return __test_with_resources("test_entry_scan_limit", function(_context) {
+        var _full_handle = __test_writer(_context, "scan_full.zip", CompressionFormat.Zip);
+        for (var _index = 0; _index < 65535; ++_index) {
+            __test_assert(ic_add_data(_full_handle, "e" + string(_index), ""), "scan-limit fixture entry " + string(_index));
+        }
+        __test_close_writer(_context, _full_handle);
+        var _full = ic_list_page(_context.directory + "/scan_full.zip", 65534);
+        __test_assert(_full.success, "65,535 entries scan to the end: " + _full.error_message);
+        __test_assert(array_length(_full.entries) == 1 && _full.entries[0].filename == "e65534", "last entry lists at the boundary");
+        __test_assert(!_full.has_more && _full.next_offset == 65535, "boundary page finishes the archive");
+
+        var _over_handle = __test_writer(_context, "scan_over.zip", CompressionFormat.Zip);
+        for (var _index = 0; _index < 65536; ++_index) {
+            __test_assert(ic_add_data(_over_handle, "e" + string(_index), ""), "scan-limit fixture entry " + string(_index));
+        }
+        __test_close_writer(_context, _over_handle);
+        var _over_path = _context.directory + "/scan_over.zip";
+        var _first = ic_list_page(_over_path, 0);
+        __test_assert(_first.success && array_length(_first.entries) == 16 && _first.has_more, "oversized archive still lists its first page");
+        var _over = ic_list_page(_over_path, 65535);
+        __test_assert(!_over.success && array_length(_over.entries) == 0, "entry 65,536 rejected by the scan limit");
+        __test_assert(string_pos("too many entries", _over.error_message) > 0, "scan-limit error reported: " + _over.error_message);
+    });
+}
+
+// A non-sparse entry is accepted at exactly 256 MiB and rejected at one byte
+// more, from its declared size, before any data is written
+// (ICompression_native.cpp :26, :1083-1093).
+function test_nonsparse_entry_size_limit()
+{
+    return __test_with_resources("test_nonsparse_entry_size_limit", function(_context) {
+        var _limit = 256 * 1024 * 1024;
+        var _zeros = __test_buffer(_context, _limit + 1); // zero-initialized
+        var _out_accept = _context.directory + "/out_accept";
+        var _out_reject = _context.directory + "/out_reject";
+        directory_create(_out_accept);
+        directory_create(_out_reject);
+
+        var _accept_handle = __test_writer(_context, "accept.zip", CompressionFormat.Zip);
+        __test_assert(ic_add_buf(_accept_handle, "payload.bin", _zeros, 0, _limit), "accept-side entry added");
+        __test_close_writer(_context, _accept_handle);
+        var _accept = ic_extract(_context.directory + "/accept.zip", _out_accept);
+        __test_assert(_accept.success && _accept.files_extracted == 1, "256 MiB entry extracts: " + _accept.error_message);
+        var _accept_file = _out_accept + "/payload.bin";
+        __test_assert(file_exists(_accept_file), "accept-side output exists");
+        var _bin = file_bin_open(_accept_file, 0);
+        __test_assert(_bin >= 0, "accept-side output opens");
+        var _size = file_bin_size(_bin);
+        var _first = file_bin_read_byte(_bin);
+        file_bin_seek(_bin, _limit - 1);
+        var _last = file_bin_read_byte(_bin);
+        file_bin_close(_bin);
+        __test_assert(_size == _limit, "accept-side output is exactly 256 MiB, got " + string(_size));
+        __test_assert(_first == 0 && _last == 0, "accept-side output contains the zero payload");
+
+        var _reject_handle = __test_writer(_context, "reject.zip", CompressionFormat.Zip);
+        __test_assert(ic_add_buf(_reject_handle, "payload.bin", _zeros, 0, _limit + 1), "reject-side entry added");
+        __test_close_writer(_context, _reject_handle);
+        var _reject = ic_extract(_context.directory + "/reject.zip", _out_reject);
+        __test_assert(!_reject.success && _reject.files_extracted == 0, "256 MiB + 1 entry rejected");
+        __test_assert(string_pos("extraction limit", _reject.error_message) > 0, "reject-side reports quota: " + _reject.error_message);
+        __test_assert(!file_exists(_out_reject + "/payload.bin"), "reject-side output not created");
+    });
+}
+
 function test_open_handle_limit()
 {
     show_debug_message("--- test_open_handle_limit ---");
@@ -1303,6 +1521,11 @@ function run_all_tests()
         test_archive_format_detection,
         test_list_pagination,
         test_sparse_extraction_limits,
+        test_extract_rejects_unsafe_entries,
+        test_extract_entry_path_limit,
+        test_list_page_long_entry_path,
+        test_entry_scan_limit,
+        test_nonsparse_entry_size_limit,
         test_open_handle_limit,
     ];
 
