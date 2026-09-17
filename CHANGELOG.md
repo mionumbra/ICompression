@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.6.1 — Pre-release (2026-09-18)
+
+- Detect a broken build-output sync before packaging: hash the build-tree DLL against the extension-folder DLL and abort when they differ.
+- Re-verify every produced archive after creation (sidecar hash, per-file manifest checksums, required-resource list, version agreement); a failed check fails the release.
+- Add negative tar-header detection tests (wrong checksum, truncated header, zero block) for both buffer and file detection (35 tests total).
+- Extend release preflight to 70 checks.
+
 ## 1.0.5.2 — Pre-release (2026-09-18)
 
 - Keep the specific scan-limit error when `ic_extract_buf` also misses the requested entry, instead of overwriting it with "not found".

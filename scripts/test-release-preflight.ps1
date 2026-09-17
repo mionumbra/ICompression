@@ -11,6 +11,7 @@ $fixtureScripts = Join-Path $source 'scripts'
 $extensionDir = Join-Path $source 'project\extensions\ICompression'
 New-Item -ItemType Directory -Path $fixtureScripts, $extensionDir -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'release.ps1') -Destination $fixtureScripts
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'validate-package.ps1') -Destination $fixtureScripts
 Copy-Item -LiteralPath (Join-Path $repository 'config.json') -Destination $source
 $extensionPath = Join-Path $extensionDir 'ICompression.yy'
 $fixtureRelease = Join-Path $fixtureScripts 'release.ps1'
@@ -37,6 +38,9 @@ $global:ICReleaseTestState.resourceSnapshots = @()
 $global:ICReleaseTestState.hostMessages = @()
 $global:ICReleaseTestState.cycleAtCompress = $null
 $global:ICReleaseTestState.counterPath = $null
+$global:ICReleaseTestState.mockBuildSync = $true
+$global:ICReleaseTestState.gmRunCalls = 0
+$global:ICReleaseTestState.tamperStagedFile = $false
 function git {
     $global:LASTEXITCODE = 0
     if ($args -contains '--show-toplevel') { return $global:ICReleaseTestState.mockWorkspace }
@@ -59,12 +63,25 @@ function cmake {
     }
     if ($global:ICReleaseTestState.allowGeneration) {
         $global:ICReleaseTestState.buildArguments += ,@($args)
+        $buildIndex = [System.Array]::IndexOf($args, '--build')
+        if ($buildIndex -ge 0) {
+            # Simulate the post-build sync: the fresh DLL lands in the build tree.
+            $releaseOut = Join-Path $args[$buildIndex + 1] 'Release'
+            New-Item -ItemType Directory -Path $releaseOut -Force | Out-Null
+            if ($global:ICReleaseTestState.mockBuildSync) {
+                Copy-Item -LiteralPath $global:ICReleaseTestState.mockDllPath -Destination (Join-Path $releaseOut 'ICompression.dll')
+            }
+            else {
+                [IO.File]::WriteAllBytes((Join-Path $releaseOut 'ICompression.dll'), [byte[]]::new(256))
+            }
+        }
         return
     }
     throw 'Unexpected build or configure invocation'
 }
 function gm-cli {
     if ($args -contains 'run') {
+        $global:ICReleaseTestState.gmRunCalls++
         if ($null -eq $global:ICReleaseTestState.mockTestOutput) {
             $global:LASTEXITCODE = 0
             throw 'STOP_AFTER_ARTIFACT_VALIDATION'
@@ -113,6 +130,9 @@ function node {
     if ($args -contains '--version') { return 'v24.0.0' }
     throw 'Unexpected MCP client invocation in preflight checks'
 }
+# Pre-load the Archive module: importing it at mock-call time would replace
+# this script-scope function and let later calls through to the real cmdlet.
+Import-Module Microsoft.PowerShell.Archive
 function Compress-Archive {
     [CmdletBinding()]
     param([string]$Path, [string]$DestinationPath, [string]$CompressionLevel)
@@ -120,6 +140,14 @@ function Compress-Archive {
     $global:ICReleaseTestState.cycleAtCompress = $null
     if ($global:ICReleaseTestState.counterPath -and (Test-Path -LiteralPath $global:ICReleaseTestState.counterPath -PathType Leaf)) {
         $global:ICReleaseTestState.cycleAtCompress = ([IO.File]::ReadAllText($global:ICReleaseTestState.counterPath) | ConvertFrom-Json).cycle_builds
+    }
+    if ($global:ICReleaseTestState.tamperStagedFile) {
+        # Flip one staged byte after SHA256SUMS.txt was written, so the archived
+        # bytes no longer match the manifest the validator re-checks.
+        $tamperTarget = Join-Path (Split-Path -Parent $Path) 'CHANGELOG.md'
+        $tamperBytes = [IO.File]::ReadAllBytes($tamperTarget)
+        $tamperBytes[0] = $tamperBytes[0] -bxor 0xFF
+        [IO.File]::WriteAllBytes($tamperTarget, $tamperBytes)
     }
     Microsoft.PowerShell.Archive\Compress-Archive @PSBoundParameters
 }
@@ -383,6 +411,9 @@ try {
         $global:ICReleaseTestState.mockTestExit = 0
         $global:ICReleaseTestState.hostMessages = @()
         $global:ICReleaseTestState.cycleAtCompress = $null
+        $global:ICReleaseTestState.mockBuildSync = $true
+        $global:ICReleaseTestState.gmRunCalls = 0
+        $global:ICReleaseTestState.tamperStagedFile = $false
     }
     Set-FixtureVersion '1.0.3.1'
     Set-FixtureArtifact '1.0.3.8'
@@ -501,6 +532,11 @@ try {
         throw 'Release did not reset the cycle counter after packaging, or rewrote other state'
     }
     Add-Pass 'Release resets the cycle counter only after the archive and sidecar exist'
+    $verified = & (Join-Path $fixtureScripts 'validate-package.ps1') -Archive $archivePath -ExpectedVersion '1.0.3.8' -StageDirectory $stageDir
+    if ($verified.Version -cne '1.0.3.8' -or $verified.Files -ne 22 -or $verified.CheckedFileHashes -ne 21 -or $verified.Tests -cne '12/12') {
+        throw 'Package validator reported unexpected results'
+    }
+    Add-Pass 'Package validator accepts the freshly built archive'
 
     Set-FixtureCycle 7
     Reset-SecondHalf
@@ -536,6 +572,20 @@ try {
     }
     Add-Pass 'Full release records build provenance and advances the seed'
 
+    Set-FixtureVersion '1.0.3.1'
+    Reset-SecondHalf
+    $archiveBefore = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
+    $global:ICReleaseTestState.allowGeneration = $true
+    $global:ICReleaseTestState.mockBuildSync = $false
+    Assert-Rejected 'A stale extension DLL aborts before the tests' @{ Version = '1.0.3.8' } 'did not sync to the extension folder' $true
+    $global:ICReleaseTestState.allowGeneration = $false
+    $global:ICReleaseTestState.mockBuildSync = $true
+    if ($global:ICReleaseTestState.gmRunCalls -ne 0 -or
+        (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash -cne $archiveBefore) {
+        throw 'Unsynced build output still ran the tests or touched the archive'
+    }
+    Add-Pass 'Unsynced build output aborts before the tests run'
+
     Set-FixtureVersion '1.0.3.9'
     Set-FixtureCycle 7
     Reset-SecondHalf
@@ -564,6 +614,14 @@ try {
     }
     finally { $cacheLines | Set-Content -LiteralPath $cacheFile -Encoding utf8NoBOM }
     Add-Pass 'Cycle reset failure warns without failing the release'
+
+    Set-FixtureCycle 7
+    Reset-SecondHalf
+    $global:ICReleaseTestState.tamperStagedFile = $true
+    Assert-Rejected 'Post-archive verification rejects tampered bytes' @{ OnlyPackage = $true } 'checksum does not match'
+    $global:ICReleaseTestState.tamperStagedFile = $false
+    if (!(Test-Path -LiteralPath $archivePath)) { throw 'Tampered archive was not left in place for diagnosis' }
+    Add-Pass 'Post-archive verification fails the release but keeps the archive'
     Write-Output "Release preflight checks: $($global:ICReleaseTestState.passed) passed"
 }
 finally {

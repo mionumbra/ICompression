@@ -176,6 +176,15 @@ if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed' }
 $buildArgs = @('--build', $build, '--config', 'Release')
 & cmake @buildArgs
 if ($LASTEXITCODE -ne 0) { throw 'CMake build failed' }
+# A broken EXT_OUTPUT_DIR bridge leaves a stale but self-consistent DLL+receipt
+# in the extension folder; the just-built DLL must match what gets packaged.
+$builtDll = Join-Path $build 'Release\ICompression.dll'
+$syncedDll = Join-Path $root 'project\extensions\ICompression\ICompression.dll'
+if (!(Test-Path -LiteralPath $builtDll -PathType Leaf)) { throw "Build-tree DLL is missing: $builtDll" }
+if (!(Test-Path -LiteralPath $syncedDll -PathType Leaf) -or
+    (Get-FileHash -LiteralPath $builtDll -Algorithm SHA256).Hash -cne (Get-FileHash -LiteralPath $syncedDll -Algorithm SHA256).Hash) {
+    throw 'Build output did not sync to the extension folder; fix the EXT_OUTPUT_DIR bridge and rebuild'
+}
 }
 
 $dllPath = Join-Path $root 'project\extensions\ICompression\ICompression.dll'
@@ -388,4 +397,7 @@ try {
         } finally { if ([IO.File]::Exists($counterTemporary)) { [IO.File]::Delete($counterTemporary) } }
     } finally { $counterLock.Dispose() }
 } catch { Write-Host "WARNING: the release cycle counter was not reset: $($_.Exception.Message)" }
+# Re-verify the finished archive before reporting success. A bad archive is
+# left in place for diagnosis; the non-zero exit is the failure signal.
+& (Join-Path $PSScriptRoot 'validate-package.ps1') -Archive $archive -ExpectedVersion $Version -StageDirectory $stage | Out-Null
 $archiveHash

@@ -145,7 +145,7 @@ pwsh -File "scripts/release.ps1" -OnlyPackage -BuildDirectory "out/release-build
 
 This still verifies the DLL receipt and runs VM tests; the build count remains unchanged. `-ResourceToolPath` may select an already installed official `ResourceTool.exe`; otherwise gm-cli starts the resource MCP. The staged project is temporary; a successful run advances the source `.yy` seed to the shipped version, also under `-OnlyPackage`, while the build counter state is untouched. Normal release generation can rewrite generated source files and cause a real rebuild; use `-OnlyPackage` when reusing an existing build is intended.
 
-The staged bundle and ZIP are written under `release/`; nothing is uploaded. The bundle includes dependency license texts, `build-info.json` with source revision, tool/compiler versions, the GameMaker runtime used, and test counts, plus SHA-256 checksums. A separate `.zip.sha256` checks the complete archive. Timestamps and compiler output mean repeated builds are not promised to produce identical ZIP bytes.
+The staged bundle and ZIP are written under `release/`; nothing is uploaded. The bundle includes dependency license texts, `build-info.json` with source revision, tool/compiler versions, the GameMaker runtime used, and test counts, plus SHA-256 checksums. A separate `.zip.sha256` checks the complete archive. After creation the archive is re-verified — sidecar hash, every manifest checksum against the archived bytes, the required-resource list, and version agreement — and a failed check fails the release. Timestamps and compiler output mean repeated builds are not promised to produce identical ZIP bytes.
 
 Run isolated release preflight checks without compiling or running GameMaker:
 

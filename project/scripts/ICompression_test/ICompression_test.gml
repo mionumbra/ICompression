@@ -1563,6 +1563,49 @@ function test_open_handle_limit()
 }
 
 // =============================================================================
+// TEST: ic_detect rejects invalid tar headers
+// =============================================================================
+
+function test_detect_tar_negatives()
+{
+    return __test_with_resources("test_detect_tar_negatives", function(_context) {
+        // A plausible ustar header whose checksum does not match its bytes.
+        var _header = __test_buffer(_context, 512);
+        buffer_poke(_header, 0, buffer_text, "payload.txt");
+        buffer_poke(_header, 100, buffer_text, "0000644");
+        buffer_poke(_header, 108, buffer_text, "0000000");
+        buffer_poke(_header, 116, buffer_text, "0000000");
+        buffer_poke(_header, 124, buffer_text, "00000000020");
+        buffer_poke(_header, 136, buffer_text, "14700000000");
+        buffer_poke(_header, 148, buffer_text, "0000000");
+        buffer_poke(_header, 156, buffer_text, "0");
+        buffer_poke(_header, 257, buffer_text, "ustar");
+        __test_assert(ic_detect(_header) != CompressionFormat.Tar, "buffer: wrong tar checksum must not detect as Tar");
+        var _header_path = _context.directory + "/bad_checksum.bin";
+        array_push(_context.files, _header_path);
+        buffer_save(_header, _header_path);
+        __test_assert(ic_detect_file(_header_path) != CompressionFormat.Tar, "file: wrong tar checksum must not detect as Tar");
+
+        // A truncated header is too short to validate as tar.
+        var _truncated = __test_buffer(_context, 100);
+        buffer_poke(_truncated, 0, buffer_text, "payload.txt");
+        __test_assert(ic_detect(_truncated) != CompressionFormat.Tar, "buffer: truncated tar header must not detect as Tar");
+        var _truncated_path = _context.directory + "/truncated.bin";
+        array_push(_context.files, _truncated_path);
+        buffer_save(_truncated, _truncated_path);
+        __test_assert(ic_detect_file(_truncated_path) != CompressionFormat.Tar, "file: truncated tar header must not detect as Tar");
+
+        // An all-zero block is the tar end-of-archive marker, not a header.
+        var _zeros = __test_buffer(_context, 512);
+        __test_assert(ic_detect(_zeros) != CompressionFormat.Tar, "buffer: zero block must not detect as Tar");
+        var _zeros_path = _context.directory + "/zeros.bin";
+        array_push(_context.files, _zeros_path);
+        buffer_save(_zeros, _zeros_path);
+        __test_assert(ic_detect_file(_zeros_path) != CompressionFormat.Tar, "file: zero block must not detect as Tar");
+    });
+}
+
+// =============================================================================
 // Test runner
 // =============================================================================
 
@@ -1600,6 +1643,7 @@ function run_all_tests()
         test_stream_validation,
         test_buffer_invalid_ranges,
         test_archive_format_detection,
+        test_detect_tar_negatives,
         test_list_pagination,
         test_sparse_extraction_limits,
         test_extract_rejects_unsafe_entries,
