@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.7.1 — Pre-release (2026-09-18)
+
+- Clarify that `IC_BUILD_STATE_DIR` is a CMake cache variable passed with `-D` at configure time, not an environment variable.
+- Document the 256 MiB Raw decompression output cap.
+
 ## 1.0.6.1 — Pre-release (2026-09-18)
 
 - Detect a broken build-output sync before packaging: hash the build-tree DLL against the extension-folder DLL and abort when they differ.

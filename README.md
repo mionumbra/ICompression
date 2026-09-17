@@ -89,6 +89,7 @@ repeat (65535) {
 ## Limits And Safety
 
 - Maximum decompressed size per entry: 256 MiB, including sparse-file holes
+- Maximum Raw decompression output: 256 MiB
 - Maximum total full-extraction output: 1 GiB, including sparse-file holes
 - Maximum file API input size: 1 GiB
 - Maximum entries scanned: 65,535
@@ -123,7 +124,7 @@ Version tags use `v<project>.<version1>.<version2>.<build>` (项目版本.版本
 
 CMake assigns the build number after a successful link. An unchanged build or a failed compilation does not increment it; a clean rebuild does. Debug/Release and different build directories for the same source checkout share the counter. Builds on the same three-field base increment its recorded count. The first build carrying a new functional version receives the count of builds since the last release, itself included, so a release's fourth field equals the builds of its release cycle; a successful release resets that cycle count. Returning to an older base resumes its recorded count to avoid duplicate numbers. On first adoption, the fourth field in the checked-in extension metadata is used as the existing build count, so the next build after `1.0.3.1` is `1.0.3.2`.
 
-Counter state lives in `.build-state/counter.json`, outside `out/`, and survives clearing build directories. Back up `.build-state` when moving the checkout; it is local state, not synchronized between separate clones or computers. `IC_BUILD_STATE_DIR` can explicitly select a shared persistent location. Do not delete it to reset numbers: missing state with existing build receipts and corrupt state both stop the build. Increase the functional version instead. Counts cannot reconstruct builds made before this mechanism was enabled.
+Counter state lives in `.build-state/counter.json`, outside `out/`, and survives clearing build directories. Back up `.build-state` when moving the checkout; it is local state, not synchronized between separate clones or computers. `IC_BUILD_STATE_DIR` can explicitly select a shared persistent location; it is a CMake cache variable, so pass it at configure time as `-DIC_BUILD_STATE_DIR=...` (setting it as an environment variable has no effect). Do not delete it to reset numbers: missing state with existing build receipts and corrupt state both stop the build. Increase the functional version instead. Counts cannot reconstruct builds made before this mechanism was enabled.
 
 The source extension `.yy` supplies the first three fields and the bootstrap count. Compilations do not rewrite it, but a successful release advances its fourth field to the shipped version through the same GameMaker resource-tool path as the staged metadata (never rewinding a newer seed), so a fresh clone's build counter always seeds above every released build number. The compiled DLL and its `.dll.build.json` receipt record the actual full version and SHA-256. Packaging checks the receipt and uses GameMaker's resource tool to set the staged extension metadata to that version. DLL, packaged extension, package filename and build information therefore agree. The optional `-Version` argument must match the compiled DLL's complete version.
 
