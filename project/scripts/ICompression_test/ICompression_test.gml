@@ -1166,6 +1166,75 @@ function __test_raw_tar(_context, _filename, _entries)
     return _path;
 }
 
+// ---- cpio "newc" fixtures (reading accepts all libarchive formats) ----
+
+function __test_cpio_pad4(_v)
+{
+    return (4 - (_v mod 4)) mod 4;
+}
+
+function __test_cpio_hex8(_archive, _offset, _value)
+{
+    var _hex = "0123456789ABCDEF";
+    for (var _i = 7; _i >= 0; --_i) {
+        buffer_poke(_archive, _offset + _i, buffer_u8, string_byte_at(_hex, (_value & 0xF) + 1));
+        _value = _value >> 4;
+    }
+}
+
+function __test_cpio_entry(_archive, _offset, _name, _data, _trailer)
+{
+    var _name_size = string_byte_length(_name) + 1;
+    var _data_size = string_byte_length(_data);
+    __test_tar_ascii(_archive, _offset, "070701");
+    __test_cpio_hex8(_archive, _offset + 6, _trailer ? 0 : 1);      // ino
+    __test_cpio_hex8(_archive, _offset + 14, _trailer ? 0 : 33188); // mode 0100644
+    __test_cpio_hex8(_archive, _offset + 22, 0);  // uid
+    __test_cpio_hex8(_archive, _offset + 30, 0);  // gid
+    __test_cpio_hex8(_archive, _offset + 38, 1);  // nlink
+    __test_cpio_hex8(_archive, _offset + 46, 0);  // mtime
+    __test_cpio_hex8(_archive, _offset + 54, _data_size);
+    __test_cpio_hex8(_archive, _offset + 62, 0);  // devmajor
+    __test_cpio_hex8(_archive, _offset + 70, 0);  // devminor
+    __test_cpio_hex8(_archive, _offset + 78, 0);  // rdevmajor
+    __test_cpio_hex8(_archive, _offset + 86, 0);  // rdevminor
+    __test_cpio_hex8(_archive, _offset + 94, _name_size);
+    __test_cpio_hex8(_archive, _offset + 102, 0); // check, unused in newc
+    _offset += 110;
+    __test_tar_ascii(_archive, _offset, _name); // NUL from the pre-zeroed buffer
+    _offset += _name_size + __test_cpio_pad4(_offset + _name_size);
+    __test_tar_ascii(_archive, _offset, _data);
+    _offset += _data_size + __test_cpio_pad4(_offset + _data_size);
+    return _offset;
+}
+
+function __test_raw_cpio(_context, _filename, _entries)
+{
+    var _path = _context.directory + "/" + _filename;
+    array_push(_context.files, _path);
+    var _total = 0;
+    for (var _i = 0; _i < array_length(_entries); ++_i) {
+        var _e = _entries[_i];
+        _total += 110 + string_byte_length(_e.name) + 1;
+        _total += __test_cpio_pad4(_total);
+        _total += string_byte_length(_e.data);
+        _total += __test_cpio_pad4(_total);
+    }
+    _total += 110 + 11; // "TRAILER!!!" + NUL
+    _total += __test_cpio_pad4(_total);
+    var _archive = __test_buffer(_context, _total);
+    buffer_fill(_archive, 0, buffer_u8, 0, _total);
+    var _offset = 0;
+    for (var _i = 0; _i < array_length(_entries); ++_i) {
+        _offset = __test_cpio_entry(_archive, _offset, _entries[_i].name, _entries[_i].data, false);
+    }
+    _offset = __test_cpio_entry(_archive, _offset, "TRAILER!!!", "", true);
+    __test_assert(_offset == _total, "cpio fixture size matches layout");
+    buffer_save(_archive, _path);
+    __test_assert(file_exists(_path), "cpio fixture saved: " + _filename);
+    return _path;
+}
+
 function __test_sparse_tar(_context, _prefix, _logical_size, _count)
 {
     var _path = _context.directory + "/" + _prefix + ".tar";
@@ -1723,6 +1792,30 @@ function test_detect_tar_negatives()
     });
 }
 
+// Archive reading accepts every libarchive format (README Support); cpio newc
+// is the pinned representative. Detection does not cover it and reports Raw.
+function test_cpio_read()
+{
+    return __test_with_resources("test_cpio_read", function(_context) {
+        var _path = __test_raw_cpio(_context, "sample.cpio", [
+            { name : "hello.txt", data : "Hello, cpio!" },
+            { name : "dir/note.txt", data : "nested" },
+        ]);
+        var _page = ic_list_page(_path, 0);
+        __test_assert(_page.success && array_length(_page.entries) == 2, "cpio lists both entries: " + _page.error_message);
+        __test_assert(_page.entries[0].filename == "hello.txt", "cpio first entry name");
+        __test_assert(ic_extract_mem(_path, "dir/note.txt") == "nested", "cpio single entry content");
+        var _out = _context.directory + "/out_cpio";
+        directory_create(_out);
+        var _result = ic_extract(_path, _out);
+        __test_assert(_result.success && _result.files_extracted == 2, "cpio full extraction: " + _result.error_message);
+        __test_assert(file_exists(_out + "/hello.txt") && file_exists(_out + "/dir/note.txt"), "cpio entries materialized");
+        var _magic = __test_buffer(_context, 16);
+        buffer_poke(_magic, 0, buffer_text, "070701");
+        __test_assert(ic_detect(_magic) == CompressionFormat.Raw, "cpio detection reports Raw");
+    });
+}
+
 // =============================================================================
 // Test runner
 // =============================================================================
@@ -1776,6 +1869,7 @@ function run_all_tests()
         test_file_apis_raw_copy,
         test_file_api_failure_cleanliness,
         test_open_handle_limit,
+        test_cpio_read,
     ];
 
     for (var _i = 0; _i < array_length(_tests); _i++)

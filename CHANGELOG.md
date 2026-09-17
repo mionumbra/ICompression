@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.9.1 — Pre-release (2026-09-18)
+
+- Document that archive reading accepts every libarchive format (cpio, ISO 9660, CAB, LHA, XAR, mtree, WARC, and more), while creation stays ZIP/7z/tar and detection reports other formats as `Raw`.
+- Add a cpio read/extract regression test pinning the documented reading capability (39 tests total).
+
 ## 1.0.8.4 — Pre-release (2026-09-18)
 
 - Stream file API operations in 1 MiB blocks instead of reading whole files into memory; the 1 GiB input cap is removed.

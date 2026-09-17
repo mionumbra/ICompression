@@ -9,7 +9,7 @@ ICompression is a native compression, decompression, and archive extension for G
 - Runner: Windows VM tested; YYC requires a configured GameMaker C++ toolchain
 - Functional version: 1.0.4; CMake assigns the fourth field on each successful DLL build (see Building below).
 
-Supported stream filters are gzip, bzip2, zstd, LZ4, and xz. ZIP, 7z, and tar archives can be created and read. RAR is detection/read-only through libarchive; RAR creation is not supported.
+Supported stream filters are gzip, bzip2, zstd, LZ4, and xz. ZIP, 7z, and tar archives can be created and read. RAR is detection/read-only through libarchive; RAR creation is not supported. Archive reading (list, extract, and single-entry APIs) accepts every format libarchive reads — beyond ZIP, 7z, tar, and RAR this includes cpio, ISO 9660, CAB, LHA, XAR, mtree, and WARC (libarchive 3.8.8). Creation is ZIP/7z/tar only, and all extraction safety checks apply regardless of format. `ic_detect` identifies the primary formats; other readable formats report `Raw`.
 
 ## Installation
 
