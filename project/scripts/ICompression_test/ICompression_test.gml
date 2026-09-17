@@ -1279,7 +1279,7 @@ function test_sparse_extraction_limits()
 }
 
 // Full extraction rejects link entries, special files, and unsafe names before
-// writing anything (ICompression_native.cpp :246-274, :1061-1076).
+// writing anything (ICompression_native.cpp :270-307, :1252-1267).
 function test_extract_rejects_unsafe_entries()
 {
     return __test_with_resources("test_extract_rejects_unsafe_entries", function(_context) {
@@ -1308,7 +1308,7 @@ function test_extract_rejects_unsafe_entries()
             if (_unsafe.blocked_outside != "") __test_assert(!file_exists(_unsafe.blocked_outside), _unsafe.key + ": nothing written outside the output directory");
         }
         // Entries written before the unsafe one stay on disk: the abort leaves
-        // earlier successes in place (ICompression_native.cpp :1068-1075).
+        // earlier successes in place (ICompression_native.cpp :1258-1267).
         var _mixed = __test_raw_tar(_context, "unsafe_mixed.tar", [
             { name: "sub/ok.txt", typeflag: ord("0"), linkname: "", data: "safe content" },
             { name: "link.txt", typeflag: ord("2"), linkname: "target.txt", data: "" }
@@ -1332,7 +1332,7 @@ function test_extract_rejects_unsafe_entries()
 }
 
 // MAX_ENTRY_PATH_SIZE (4096) bounds the archive entry path alone; output_dir is
-// not part of the measurement (ICompression_native.cpp :29, :1059-1062).
+// not part of the measurement (ICompression_native.cpp :32, :1252-1254).
 function test_extract_entry_path_limit()
 {
     return __test_with_resources("test_extract_entry_path_limit", function(_context) {
@@ -1357,7 +1357,7 @@ function test_extract_entry_path_limit()
 
 // Listing fails on entry paths over 256 UTF-8 bytes; 256 bytes still lists, and
 // entries skipped by the page offset are never name-checked
-// (ICompression_native.cpp :30, :966-982).
+// (ICompression_native.cpp :33, :1160-1166).
 function test_list_page_long_entry_path()
 {
     return __test_with_resources("test_list_page_long_entry_path", function(_context) {
@@ -1384,9 +1384,9 @@ function test_list_page_long_entry_path()
 }
 
 // 65,535 entries scan cleanly; the 65,536th header trips MAX_ARCHIVE_ENTRIES,
-// surfaced by ic_list_page as a dedicated error (ICompression_native.cpp :28,
-// :951-954). ic_extract enforces the same bound via the unsafe-entry path
-// (:1061); that variant is not exercised to avoid writing 65,535 files.
+// surfaced by ic_list_page as a dedicated error (ICompression_native.cpp :31,
+// :1135-1138). ic_extract enforces the same bound via the unsafe-entry path
+// (:1252); that variant is not exercised to avoid writing 65,535 files.
 function test_entry_scan_limit()
 {
     return __test_with_resources("test_entry_scan_limit", function(_context) {
@@ -1416,7 +1416,7 @@ function test_entry_scan_limit()
 
 // A non-sparse entry is accepted at exactly 256 MiB and rejected at one byte
 // more, from its declared size, before any data is written
-// (ICompression_native.cpp :26, :1083-1093).
+// (ICompression_native.cpp :28, :1269-1283).
 function test_nonsparse_entry_size_limit()
 {
     return __test_with_resources("test_nonsparse_entry_size_limit", function(_context) {
@@ -1451,6 +1451,87 @@ function test_nonsparse_entry_size_limit()
         __test_assert(!_reject.success && _reject.files_extracted == 0, "256 MiB + 1 entry rejected");
         __test_assert(string_pos("extraction limit", _reject.error_message) > 0, "reject-side reports quota: " + _reject.error_message);
         __test_assert(!file_exists(_out_reject + "/payload.bin"), "reject-side output not created");
+    });
+}
+
+// A missing entry in an over-limit archive keeps the specific scan-limit error
+// instead of being overwritten by the generic not-found message
+// (ICompression_native.cpp :1541-1570).
+function test_extract_buf_keeps_scan_limit_error()
+{
+    return __test_with_resources("test_extract_buf_keeps_scan_limit_error", function(_context) {
+        var _handle = __test_writer(_context, "scan_over_buf.zip", CompressionFormat.Zip);
+        for (var _index = 0; _index < 65536; ++_index) {
+            __test_assert(ic_add_data(_handle, "e" + string(_index), ""), "scan-limit fixture entry " + string(_index));
+        }
+        __test_close_writer(_context, _handle);
+        var _output = __test_buffer(_context, 16);
+        var _result = ic_extract_buf(_context.directory + "/scan_over_buf.zip", "missing.txt", _output, 0);
+        __test_assert(!_result.success, "missing entry in an over-limit archive fails");
+        __test_assert(string_pos("scan limit", _result.error_message) > 0, "scan-limit error kept, got: " + _result.error_message);
+        __test_assert(string_pos("not found", _result.error_message) == 0, "specific error not clobbered: " + _result.error_message);
+    });
+}
+
+// Windows-reserved entry names are rejected per path segment before anything is
+// written: NTFS ADS colons, DOS device names (on the stem before the first
+// dot), and segments ending with a dot or space
+// (ICompression_native.cpp :252-307).
+function test_extract_rejects_windows_names()
+{
+    return __test_with_resources("test_extract_rejects_windows_names", function(_context) {
+        var _cases = [
+            { key: "device_dir", name: "dir/NUL" },
+            { key: "device_stem", name: "NUL.txt" },
+            { key: "ads_colon", name: "evil.txt:ads" },
+            { key: "trailing_dot", name: "trailing." },
+            { key: "trailing_space", name: "trailing /file.txt" },
+        ];
+        for (var _index = 0; _index < array_length(_cases); ++_index) {
+            var _case = _cases[_index];
+            var _path = __test_raw_tar(_context, "win_" + _case.key + ".tar", [
+                { name: _case.name, typeflag: ord("0"), linkname: "", data: "evil" }
+            ]);
+            var _out = _context.directory + "/out_" + _case.key;
+            directory_create(_out);
+            var _result = ic_extract(_path, _out);
+            __test_assert(!_result.success, _case.key + ": extraction rejected");
+            __test_assert(_result.files_extracted == 0, _case.key + ": nothing extracted, got " + string(_result.files_extracted));
+            __test_assert(string_pos("unsafe entry", _result.error_message) > 0, _case.key + ": unsafe-entry error, got " + _result.error_message);
+            // DOS device names answer file_exists() through the device itself,
+            // so prove the output directory stayed empty with a wildcard.
+            var _found = file_find_first(_out + "/*", fa_directory);
+            file_find_close();
+            __test_assert(_found == "", _case.key + ": nothing materialized");
+        }
+        var _control = __test_raw_tar(_context, "win_safe_control.tar", [
+            { name: "sub/ok.txt", typeflag: ord("0"), linkname: "", data: "safe content" }
+        ]);
+        var _control_out = _context.directory + "/out_control";
+        directory_create(_control_out);
+        var _control_result = ic_extract(_control, _control_out);
+        __test_assert(_control_result.success && _control_result.files_extracted == 1, "safe control extracts: " + _control_result.error_message);
+        __test_assert(file_exists(_control_out + "/sub/ok.txt"), "safe control file materialized");
+    });
+}
+
+// An attacker-controlled entry path embedded in the unsafe-entry error is
+// truncated to 256 bytes without splitting a UTF-8 sequence
+// (ICompression_native.cpp :311-321, :1260).
+function test_extract_error_truncates_path()
+{
+    return __test_with_resources("test_extract_error_truncates_path", function(_context) {
+        var _long_name = string_repeat("a", 1000) + ":" + string_repeat("b", 999);
+        var _handle = __test_writer(_context, "truncate.zip", CompressionFormat.Zip);
+        __test_assert(ic_add_data(_handle, _long_name, "x"), "long colon entry added");
+        __test_close_writer(_context, _handle);
+        var _out = _context.directory + "/out_truncate";
+        directory_create(_out);
+        var _result = ic_extract(_context.directory + "/truncate.zip", _out);
+        __test_assert(!_result.success, "colon entry rejected");
+        __test_assert(string_pos("unsafe entry", _result.error_message) > 0, "unsafe-entry error, got: " + string_copy(_result.error_message, 1, 64));
+        __test_assert(string_length(_result.error_message) <= 300, "error message bounded, got length " + string(string_length(_result.error_message)));
+        __test_assert(string_copy(_result.error_message, string_length(_result.error_message) - 2, 3) == "...", "truncated message ends with an ellipsis");
     });
 }
 
@@ -1526,6 +1607,9 @@ function run_all_tests()
         test_list_page_long_entry_path,
         test_entry_scan_limit,
         test_nonsparse_entry_size_limit,
+        test_extract_buf_keeps_scan_limit_error,
+        test_extract_rejects_windows_names,
+        test_extract_error_truncates_path,
         test_open_handle_limit,
     ];
 

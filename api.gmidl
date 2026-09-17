@@ -38,6 +38,7 @@ class `[[ArchiveEntry]]` prototype Object
     [field]
     property filename : string { get; set; }
 
+    // Always -1 (unknown): libarchive exposes no per-entry compressed size.
     [field]
     property compressed_size : int64 { get; set; }
 
@@ -47,6 +48,7 @@ class `[[ArchiveEntry]]` prototype Object
     [field]
     property is_directory : bool { get; set; }
 
+    // Always 0 (unknown): libarchive exposes no per-entry CRC32.
     [field, type_hint = `uint32`]
     property crc32 : gmval { get; set; }
 }

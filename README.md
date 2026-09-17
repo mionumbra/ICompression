@@ -84,7 +84,7 @@ repeat (65535) {
 }
 ```
 
-`ic_list()` remains available as a convenience for the first page only. Use `ic_list_page()` when archives may contain more than 16 entries. `has_more` is false on the final page, including a full 16-entry page.
+`ic_list()` remains available as a convenience for the first page only. Use `ic_list_page()` when archives may contain more than 16 entries. `has_more` is false on the final page, including a full 16-entry page. Listed `compressed_size` is always -1 and `crc32` always 0, both meaning unknown; libarchive exposes neither per entry.
 
 ## Limits And Safety
 
@@ -97,6 +97,7 @@ repeat (65535) {
 - Listing page size: 16 entries
 - Listing path limit: 256 UTF-8 bytes
 - Full extraction rejects absolute paths, `..`, symlinks, hardlinks, and special files
+- Full extraction also rejects, per path segment: `:` (NTFS ADS), DOS device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9, with any extension), and trailing dots or spaces
 
 Extraction failure can leave files already written before the failure. Extract untrusted archives into a new temporary directory and rename it only after `ic_extract()` reports success.
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.5.2 — Pre-release (2026-09-18)
+
+- Keep the specific scan-limit error when `ic_extract_buf` also misses the requested entry, instead of overwriting it with "not found".
+- Truncate entry paths embedded in extraction error messages to 256 bytes (UTF-8 boundary safe) so crafted archives cannot produce megabyte-long messages.
+- Reject NTFS alternate-data-stream syntax, DOS device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9), and trailing dot/space segments in extraction entry paths.
+- Document that listed `compressed_size`/`crc32` are always unknown (-1/0) because libarchive exposes neither per entry.
+- Add regression coverage for all of the above (34 tests total).
+
 ## 1.0.4.5 — Pre-release (2026-09-17)
 
 - Add regression tests for extraction rejection of absolute paths, `..` traversal, symlinks, hardlinks, and special files, plus boundary tests for entry path length, listing path length, entry scan count, and non-sparse entry size limits.

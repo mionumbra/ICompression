@@ -31,6 +31,7 @@ static constexpr uint64_t MAX_FILE_READ_SIZE = 1024ull * 1024ull * 1024ull;
 static constexpr size_t MAX_ARCHIVE_ENTRIES = 65535;
 static constexpr size_t MAX_ENTRY_PATH_SIZE = 4096;
 static constexpr size_t MAX_LIST_PATH_SIZE = 256;
+static constexpr size_t MAX_MESSAGE_PATH_SIZE = 256;
 static constexpr size_t MAX_LIST_PAGE_ENTRIES = 16;
 static constexpr size_t MAX_OPEN_ARCHIVES = 64;
 
@@ -246,6 +247,26 @@ static bool read_current_entry(struct archive* a, std::string& output, size_t li
     return true;
 }
 
+// Match a reserved DOS device name on the segment stem before the first dot,
+// so both "NUL" and "NUL.txt" collide with the Windows device.
+static bool is_reserved_device_name(std::string_view segment)
+{
+    const std::string_view stem = segment.substr(0, segment.find('.'));
+    if (stem.size() < 3 || stem.size() > 4)
+        return false;
+
+    char upper[4];
+    for (size_t i = 0; i < stem.size(); ++i)
+        upper[i] = static_cast<char>(std::toupper(static_cast<unsigned char>(stem[i])));
+
+    const std::string_view name(upper, stem.size());
+    if (name == "CON" || name == "PRN" || name == "AUX" || name == "NUL")
+        return true;
+    if (stem.size() == 4 && name[3] >= '1' && name[3] <= '9')
+        return name.substr(0, 3) == "COM" || name.substr(0, 3) == "LPT";
+    return false;
+}
+
 static bool is_safe_archive_entry_path(std::string_view path)
 {
     if (path.empty())
@@ -268,12 +289,34 @@ static bool is_safe_archive_entry_path(std::string_view path)
         if (segment == "..")
             return false;
 
+        // Windows name rules: a ':' is NTFS ADS syntax, and the OS silently
+        // strips trailing dots and spaces, collapsing distinct archive names.
+        if (segment.find(':') != std::string_view::npos)
+            return false;
+        if (is_reserved_device_name(segment))
+            return false;
+        if (!segment.empty() && (segment.back() == '.' || segment.back() == ' '))
+            return false;
+
         if (end == path.size())
             break;
         start = end + 1;
     }
 
     return true;
+}
+
+// Bound an attacker-controlled path before embedding it in an error message.
+// Back off to a non-continuation byte so no UTF-8 sequence is split.
+static std::string truncate_path_for_message(std::string_view path)
+{
+    if (path.size() <= MAX_MESSAGE_PATH_SIZE)
+        return std::string(path);
+
+    size_t end = MAX_MESSAGE_PATH_SIZE;
+    while (end > 0 && (static_cast<unsigned char>(path[end]) & 0xC0) == 0x80)
+        --end;
+    return std::string(path.substr(0, end)) + "...";
 }
 
 static std::string base64_encode(std::string_view input)
@@ -1121,6 +1164,8 @@ static ListResult ic_list_page_impl(std::string_view archive, int32_t offset)
             result.error_message = "Archive entry path is too long to list";
             break;
         }
+        // libarchive 3.8.8 exposes no per-entry compressed size or CRC32
+        // through its public reader API; -1 and 0 mean unknown.
         ae.compressed_size = -1;
         ae.uncompressed_size = static_cast<int64_t>(archive_entry_size_is_set(entry) ? archive_entry_size(entry) : -1);
         ae.is_directory = (archive_entry_filetype(entry) == AE_IFDIR);
@@ -1212,7 +1257,7 @@ static ExtractResult ic_extract_impl(std::string_view archive, std::string_view 
             (filetype != AE_IFREG && filetype != AE_IFDIR))
         {
             archive_read_data_skip(a);
-            result.error_message = "Archive contains an unsafe entry: " + entry_path;
+            result.error_message = "Archive contains an unsafe entry: " + truncate_path_for_message(entry_path);
             result.success = false;
             archive_read_close(a);
             archive_read_free(a);
@@ -1521,7 +1566,7 @@ static BufferResult ic_extract_buf_impl(std::string_view archive, std::string_vi
         break;
     }
 
-    if (!found)
+    if (!found && result.error_message.empty())
         result.error_message = "Archive entry was not found";
     archive_read_close(a);
     archive_read_free(a);
