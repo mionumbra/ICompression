@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.8.4 — Pre-release (2026-09-18)
+
+- Stream file API operations in 1 MiB blocks instead of reading whole files into memory; the 1 GiB input cap is removed.
+- Write file API outputs to a temporary file and rename on success, so failures never leave partial or clobbered outputs.
+- Keep single-layer decompression semantics identical in the streaming path (one filter, format match, full consumption, trailing-data rejection, valid empty streams).
+- Add a 300 MiB file round-trip test, Raw byte-copy test, and failure-cleanliness tests (38 tests total).
+
 ## 1.0.7.1 — Pre-release (2026-09-18)
 
 - Clarify that `IC_BUILD_STATE_DIR` is a CMake cache variable passed with `-D` at configure time, not an environment variable.

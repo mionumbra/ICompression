@@ -1535,6 +1535,124 @@ function test_extract_error_truncates_path()
     });
 }
 
+// The file APIs stream, so input past the old in-memory caps round-trips
+// (ICompression_native.cpp :280-334, :924-1170). 300 MiB clears the 256 MiB
+// per-entry cap the previous whole-file implementation inherited from
+// decompress_raw; zeros keep every archive under a megabyte, so the VM spends
+// seconds on I/O instead of minutes on compression.
+function test_file_apis_stream_large_input()
+{
+    return __test_with_resources("test_file_apis_stream_large_input", function(_context) {
+        var _size = 300 * 1024 * 1024;
+        var _source = _context.directory + "/large.bin";
+        array_push(_context.files, _source);
+        // Materialize the zero input with a single write past EOF: the OS
+        // zero-fills instantly, while buffer_save() of a buffer this large
+        // silently writes a 1-byte stub in the VM (reproduced on 1.0.8.2).
+        var _source_file = file_bin_open(_source, 1);
+        file_bin_seek(_source_file, _size - 1);
+        file_bin_write_byte(_source_file, 0);
+        file_bin_close(_source_file);
+        var _source_check = file_bin_open(_source, 0);
+        var _source_size = file_bin_size(_source_check);
+        file_bin_close(_source_check);
+        __test_assert(_source_size == _size, "large input materialized, got " + string(_source_size));
+
+        var _formats = [CompressionFormat.Gzip, CompressionFormat.Zstd];
+        var _extensions = ["gz", "zst"];
+        for (var _index = 0; _index < array_length(_formats); ++_index) {
+            var _format = _formats[_index];
+            var _label = ic_to_str(_format) + " 300 MiB file";
+            var _archive = _context.directory + "/large_" + string(_index) + "." + _extensions[_index];
+            var _restored = _context.directory + "/restored_" + string(_index) + ".bin";
+            var _roundtrip = _context.directory + "/roundtrip_" + string(_index) + "." + _extensions[_index];
+            array_push(_context.files, _archive);
+            array_push(_context.files, _restored);
+            array_push(_context.files, _roundtrip);
+            __test_assert(ic_compress_file(_source, _archive, _format, CompressionLevel.Default), _label + " compresses");
+            __test_assert(ic_decompress_file(_archive, _restored, _format), _label + " decompresses");
+            var _file = file_bin_open(_restored, 0);
+            __test_assert(_file >= 0, _label + " restored output opens");
+            var _restored_size = file_bin_size(_file);
+            file_bin_close(_file);
+            __test_assert(_restored_size == _size, _label + " restored size, got " + string(_restored_size));
+            // Recompressing the restored output must reproduce the archive
+            // byte for byte: both filters are deterministic at a fixed level.
+            // The gzip filter stamps its 10-byte header with the current time
+            // (libarchive archive_write_add_filter_gzip.c), so only the
+            // payload beyond the fixed header is compared.
+            __test_assert(ic_compress_file(_restored, _roundtrip, _format, CompressionLevel.Default), _label + " recompresses");
+            var _first = __test_load_buffer(_context, _archive);
+            var _second = __test_load_buffer(_context, _roundtrip);
+            __test_assert(buffer_get_size(_first) == buffer_get_size(_second), _label + " archive sizes match");
+            __test_assert(buffer_get_size(_first) > 10 && buffer_get_size(_first) < 4 * 1024 * 1024, _label + " zeros compress to a tiny archive");
+            __test_assert(__test_equal_bytes(_first, 10, _second, 10, buffer_get_size(_first) - 10), _label + " archive payloads match");
+        }
+    });
+}
+
+// Raw file compression stores the payload verbatim and raw decompression is a
+// plain byte copy (ICompression_native.cpp :1017-1044).
+function test_file_apis_raw_copy()
+{
+    return __test_with_resources("test_file_apis_raw_copy", function(_context) {
+        var _size = 65536 + 3; // deliberately not block-aligned
+        var _source_buffer = __test_buffer(_context, _size);
+        for (var _index = 0; _index < _size; ++_index) buffer_poke(_source_buffer, _index, buffer_u8, _index mod 251);
+        var _source = _context.directory + "/raw_input.bin";
+        var _archive = _context.directory + "/raw_archive.bin";
+        var _restored = _context.directory + "/raw_restored.bin";
+        array_push(_context.files, _source);
+        array_push(_context.files, _archive);
+        array_push(_context.files, _restored);
+        buffer_save(_source_buffer, _source);
+        __test_assert(ic_compress_file(_source, _archive, CompressionFormat.Raw, CompressionLevel.Default), "raw file compresses");
+        var _archive_buffer = __test_load_buffer(_context, _archive);
+        __test_assert(buffer_get_size(_archive_buffer) == _size, "raw archive stores the payload verbatim");
+        __test_assert(__test_equal_bytes(_source_buffer, 0, _archive_buffer, 0, _size), "raw archive bytes identical");
+        __test_assert(ic_decompress_file(_archive, _restored, CompressionFormat.Raw), "raw file decompresses");
+        var _restored_buffer = __test_load_buffer(_context, _restored);
+        __test_assert(buffer_get_size(_restored_buffer) == _size, "raw restored size");
+        __test_assert(__test_equal_bytes(_source_buffer, 0, _restored_buffer, 0, _size), "raw restored bytes identical");
+    });
+}
+
+// Streaming outputs are all-or-nothing: failures create no destination, leave
+// an existing destination untouched, and delete their temporary files
+// (ICompression_native.cpp :75-99).
+function test_file_api_failure_cleanliness()
+{
+    return __test_with_resources("test_file_api_failure_cleanliness", function(_context) {
+        var _missing_dst = _context.directory + "/missing.gz";
+        __test_assert(!ic_compress_file(_context.directory + "/no_such_input.bin", _missing_dst, CompressionFormat.Gzip, CompressionLevel.Default), "missing source fails");
+        __test_assert(!file_exists(_missing_dst), "missing source creates no destination");
+
+        var _garbage = _context.directory + "/garbage.bin";
+        array_push(_context.files, _garbage);
+        var _garbage_text = "this is not a compressed stream";
+        var _garbage_buffer = __test_buffer(_context, string_byte_length(_garbage_text));
+        buffer_write(_garbage_buffer, buffer_text, _garbage_text);
+        buffer_save(_garbage_buffer, _garbage);
+
+        var _out = _context.directory + "/garbage.out";
+        __test_assert(!ic_decompress_file(_garbage, _out, CompressionFormat.Gzip), "garbage input fails");
+        __test_assert(!file_exists(_out), "garbage input creates no output");
+
+        var _existing = _context.directory + "/existing.out";
+        array_push(_context.files, _existing);
+        var _kept = __test_buffer(_context, 8);
+        for (var _index = 0; _index < 8; ++_index) buffer_poke(_kept, _index, buffer_u8, 200 + _index);
+        buffer_save(_kept, _existing);
+        __test_assert(!ic_decompress_file(_garbage, _existing, CompressionFormat.Gzip), "garbage over existing output fails");
+        var _preserved = __test_load_buffer(_context, _existing);
+        __test_assert(buffer_get_size(_preserved) == 8 && __test_equal_bytes(_kept, 0, _preserved, 0, 8), "failed decompress preserves existing output");
+
+        var _leftover = file_find_first(_context.directory + "/*.tmp*", fa_directory);
+        file_find_close();
+        __test_assert(_leftover == "", "no temporary files remain");
+    });
+}
+
 function test_open_handle_limit()
 {
     show_debug_message("--- test_open_handle_limit ---");
@@ -1654,6 +1772,9 @@ function run_all_tests()
         test_extract_buf_keeps_scan_limit_error,
         test_extract_rejects_windows_names,
         test_extract_error_truncates_path,
+        test_file_apis_stream_large_input,
+        test_file_apis_raw_copy,
+        test_file_api_failure_cleanliness,
         test_open_handle_limit,
     ];
 

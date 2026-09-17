@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <limits>
@@ -27,7 +28,7 @@ using namespace gm_enums;
 
 static constexpr size_t MAX_ENTRY_SIZE = 256ull * 1024ull * 1024ull;
 static constexpr uint64_t MAX_TOTAL_EXTRACT_SIZE = 1024ull * 1024ull * 1024ull;
-static constexpr uint64_t MAX_FILE_READ_SIZE = 1024ull * 1024ull * 1024ull;
+static constexpr size_t FILE_STREAM_CHUNK_SIZE = 1024ull * 1024ull;
 static constexpr size_t MAX_ARCHIVE_ENTRIES = 65535;
 static constexpr size_t MAX_ENTRY_PATH_SIZE = 4096;
 static constexpr size_t MAX_LIST_PATH_SIZE = 256;
@@ -70,6 +71,34 @@ static std::wstring utf8_to_wide(std::string_view utf8)
 #define FOPEN_IFSTREAM(var, path, mode) std::ifstream var(std::string(path), mode)
 #define FOPEN_OFSTREAM(var, path, mode) std::ofstream var(std::string(path), mode)
 #endif
+
+// All-or-nothing file outputs are written beside their destination so the
+// final rename stays on one volume.
+static std::string make_temp_path(std::string_view dst)
+{
+    static uint32_t sequence = 0;
+    return std::string(dst) + ".tmp" + std::to_string(++sequence);
+}
+
+static void delete_file(std::string_view path)
+{
+#ifdef OS_WINDOWS
+    DeleteFileW(utf8_to_wide(path).c_str());
+#else
+    std::remove(std::string(path).c_str());
+#endif
+}
+
+// Overwrite an existing destination, matching ofstream truncation semantics.
+static bool replace_file(std::string_view temp, std::string_view dst)
+{
+#ifdef OS_WINDOWS
+    return MoveFileExW(utf8_to_wide(temp).c_str(), utf8_to_wide(dst).c_str(),
+        MOVEFILE_REPLACE_EXISTING) != 0;
+#else
+    return std::rename(std::string(temp).c_str(), std::string(dst).c_str()) == 0;
+#endif
+}
 
 // Map CompressionFormat to libarchive filter code
 static int format_to_filter(CompressionFormat fmt)
@@ -245,6 +274,63 @@ static bool read_current_entry(struct archive* a, std::string& output, size_t li
         return false;
     }
     return true;
+}
+
+// Copy a plain file into the current archive entry in fixed-size blocks.
+static bool stream_file_to_entry(std::ifstream& in, struct archive* a, int64_t file_size)
+{
+    std::string chunk(FILE_STREAM_CHUNK_SIZE, '\0');
+    int64_t remaining = file_size;
+    while (remaining > 0)
+    {
+        const auto want = static_cast<std::streamsize>(std::min<int64_t>(remaining, static_cast<int64_t>(chunk.size())));
+        in.read(chunk.data(), want);
+        const std::streamsize got = in.gcount();
+        if (got != want)
+            return false;
+        if (archive_write_data(a, chunk.data(), static_cast<size_t>(got)) != static_cast<la_ssize_t>(got))
+            return false;
+        remaining -= got;
+    }
+    return true;
+}
+
+// Copy the remainder of a plain input file into a plain output file.
+static bool stream_file_to_file(std::ifstream& in, std::ofstream& out)
+{
+    std::string chunk(FILE_STREAM_CHUNK_SIZE, '\0');
+    for (;;)
+    {
+        in.read(chunk.data(), static_cast<std::streamsize>(chunk.size()));
+        const std::streamsize got = in.gcount();
+        if (got > 0)
+        {
+            out.write(chunk.data(), got);
+            if (!out)
+                return false;
+        }
+        if (got < static_cast<std::streamsize>(chunk.size()))
+            break;
+    }
+    return !in.bad();
+}
+
+// Copy the current reader entry into a plain file, preserving block order.
+static bool stream_entry_to_file(struct archive* a, std::ofstream& out)
+{
+    const void* block;
+    size_t block_size;
+    la_int64_t block_offset;
+    int status;
+    while ((status = archive_read_data_block(a, &block, &block_size, &block_offset)) == ARCHIVE_OK)
+    {
+        if (block_size == 0)
+            continue;
+        out.write(static_cast<const char*>(block), static_cast<std::streamsize>(block_size));
+        if (!out)
+            return false;
+    }
+    return status == ARCHIVE_EOF;
 }
 
 // Match a reserved DOS device name on the segment stem before the first dot,
@@ -837,32 +923,88 @@ std::string ic_decompress(std::string_view data, CompressionFormat format)
 
 static bool ic_compress_file_impl(std::string_view src, std::string_view dst, CompressionFormat format, int32_t level)
 {
+    // The single entry is sized up front; the zip and 7z writers require it.
     FOPEN_IFSTREAM(in, src, std::ios::binary | std::ios::ate);
     if (!in) return false;
 
-    auto file_size = in.tellg();
+    const int64_t file_size = static_cast<int64_t>(in.tellg());
     if (file_size < 0)
         return false;
-    if (static_cast<uint64_t>(file_size) > MAX_FILE_READ_SIZE)
-    {
-        LOG_ERROR("ic_compress_file: input file exceeds the configured size limit");
-        return false;
-    }
     in.seekg(0);
 
-    std::string file_data(static_cast<size_t>(file_size), '\0');
-    in.read(file_data.data(), file_size);
-    if (!in)
+    struct archive* a = archive_write_new();
+    if (!a)
+    {
+        LOG_ERROR("ic_compress_file: archive_write_new() returned null");
         return false;
+    }
 
-    std::string compressed;
-    if (!compress_raw(file_data, format, level, compressed)) return false;
+    if (!configure_archive_writer(a, format, level))
+    {
+        archive_write_free(a);
+        return false;
+    }
 
-    FOPEN_OFSTREAM(out, dst, std::ios::binary);
-    if (!out) return false;
-    out.write(compressed.data(), static_cast<std::streamsize>(compressed.size()));
-    out.close();
-    return static_cast<bool>(out);
+    archive_write_set_bytes_per_block(a, 0);
+    archive_write_set_bytes_in_last_block(a, 0);
+
+    const std::string temp_path = make_temp_path(dst);
+    if (OPEN_ARCHIVE_WRITE(a, temp_path) != ARCHIVE_OK)
+    {
+        LOG_ERROR("ic_compress_file: archive_write_open_filename failed: %s", archive_error_string(a));
+        archive_write_free(a);
+        delete_file(temp_path);
+        return false;
+    }
+
+    struct archive_entry* entry = archive_entry_new();
+    if (!entry)
+    {
+        archive_write_close(a);
+        archive_write_free(a);
+        delete_file(temp_path);
+        return false;
+    }
+
+    archive_entry_set_pathname_utf8(entry, "data");
+    archive_entry_set_filetype(entry, AE_IFREG);
+    archive_entry_set_size(entry, static_cast<la_int64_t>(file_size));
+    archive_entry_set_perm(entry, 0644);
+    if (archive_write_header(a, entry) < ARCHIVE_OK)
+    {
+        LOG_ERROR("ic_compress_file: archive_write_header failed: %s", archive_error_string(a));
+        archive_entry_free(entry);
+        archive_write_close(a);
+        archive_write_free(a);
+        delete_file(temp_path);
+        return false;
+    }
+
+    if (!stream_file_to_entry(in, a, file_size))
+    {
+        LOG_ERROR("ic_compress_file: failed to stream source file: %s", archive_error_string(a));
+        archive_entry_free(entry);
+        archive_write_close(a);
+        archive_write_free(a);
+        delete_file(temp_path);
+        return false;
+    }
+    archive_entry_free(entry);
+    if (archive_write_close(a) < ARCHIVE_OK)
+    {
+        LOG_ERROR("ic_compress_file: archive_write_close failed: %s", archive_error_string(a));
+        archive_write_free(a);
+        delete_file(temp_path);
+        return false;
+    }
+    archive_write_free(a);
+
+    if (!replace_file(temp_path, dst))
+    {
+        delete_file(temp_path);
+        return false;
+    }
+    return true;
 }
 
 bool ic_compress_file(std::string_view src, std::string_view dst, CompressionFormat format, int32_t level)
@@ -872,32 +1014,159 @@ bool ic_compress_file(std::string_view src, std::string_view dst, CompressionFor
 
 static bool ic_decompress_file_impl(std::string_view src, std::string_view dst, CompressionFormat format)
 {
-    FOPEN_IFSTREAM(in, src, std::ios::binary | std::ios::ate);
-    if (!in) return false;
-
-    auto file_size = in.tellg();
-    if (file_size < 0)
-        return false;
-    if (static_cast<uint64_t>(file_size) > MAX_FILE_READ_SIZE)
+    if (format == CompressionFormat::Raw)
     {
-        LOG_ERROR("ic_decompress_file: input file exceeds the configured size limit");
+        // A raw stream is a plain byte copy with no container to validate.
+        FOPEN_IFSTREAM(in, src, std::ios::binary);
+        if (!in) return false;
+
+        const std::string temp_path = make_temp_path(dst);
+        FOPEN_OFSTREAM(out, temp_path, std::ios::binary);
+        if (!out)
+        {
+            delete_file(temp_path);
+            return false;
+        }
+        const bool copied = stream_file_to_file(in, out);
+        out.close();
+        if (!copied || !out)
+        {
+            delete_file(temp_path);
+            return false;
+        }
+        if (!replace_file(temp_path, dst))
+        {
+            delete_file(temp_path);
+            return false;
+        }
+        return true;
+    }
+
+    int expected_filter = ARCHIVE_FILTER_NONE;
+    int expected_format = 0;
+    switch (format)
+    {
+    case CompressionFormat::Gzip:
+    case CompressionFormat::Bzip2:
+    case CompressionFormat::Zstd:
+    case CompressionFormat::Lz4:
+    case CompressionFormat::Xz:
+        expected_filter = format_to_filter(format);
+        expected_format = ARCHIVE_FORMAT_RAW;
+        break;
+    case CompressionFormat::Zip:    expected_format = ARCHIVE_FORMAT_ZIP; break;
+    case CompressionFormat::SevenZ: expected_format = ARCHIVE_FORMAT_7ZIP; break;
+    case CompressionFormat::Tar:    expected_format = ARCHIVE_FORMAT_TAR; break;
+    case CompressionFormat::Rar:    expected_format = ARCHIVE_FORMAT_RAR; break;
+    default:
+        LOG_ERROR("ic_decompress: unsupported compression format");
         return false;
     }
-    in.seekg(0);
 
-    std::string file_data(static_cast<size_t>(file_size), '\0');
-    in.read(file_data.data(), file_size);
-    if (!in)
+    FOPEN_IFSTREAM(size_probe, src, std::ios::binary | std::ios::ate);
+    if (!size_probe) return false;
+    const auto source_size = size_probe.tellg();
+    if (source_size < 0)
+        return false;
+    size_probe.close();
+    // A compressed empty stream still has a header and trailer.
+    if (source_size == 0)
         return false;
 
-    std::string decompressed;
-    if (!decompress_raw(file_data, format, decompressed)) return false;
+    std::unique_ptr<struct archive, decltype(&archive_read_free)> reader(
+        archive_read_new(), &archive_read_free);
+    auto* a = reader.get();
+    if (!a)
+    {
+        LOG_ERROR("ic_decompress: archive_read_new() returned null");
+        return false;
+    }
 
-    FOPEN_OFSTREAM(out, dst, std::ios::binary);
-    if (!out) return false;
-    out.write(decompressed.data(), static_cast<std::streamsize>(decompressed.size()));
+    const bool stream = expected_filter != ARCHIVE_FILTER_NONE;
+    if (stream)
+    {
+        // Force one filter and a raw container: bidding can recursively decode
+        // nested streams or interpret the recovered bytes as another archive.
+        if (!archive_status_ok(a, archive_read_set_format(a, ARCHIVE_FORMAT_RAW), "raw reader format") ||
+            !archive_status_ok(a, archive_read_append_filter(a, expected_filter), "stream reader filter"))
+            return false;
+    }
+    else
+    {
+        if (!archive_status_ok(a, archive_read_support_format_by_code(a, expected_format), "archive reader format"))
+            return false;
+        if (format == CompressionFormat::Rar &&
+            !archive_status_ok(a, archive_read_support_format_rar5(a), "RAR5 reader format"))
+            return false;
+    }
+
+    if (!archive_status_ok(a, OPEN_ARCHIVE_READ(a, src, 10240), "archive_read_open_filename"))
+        return false;
+
+    const std::string temp_path = make_temp_path(dst);
+    FOPEN_OFSTREAM(out, temp_path, std::ios::binary);
+    if (!out)
+    {
+        delete_file(temp_path);
+        return false;
+    }
+
+    bool found_entry = false;
+    bool read_ok = true;
+    struct archive_entry* entry;
+    int header_status;
+    size_t scanned = 0;
+    while ((header_status = archive_read_next_header(a, &entry)) == ARCHIVE_OK)
+    {
+        if (++scanned > MAX_ARCHIVE_ENTRIES)
+        {
+            read_ok = false;
+            break;
+        }
+        if (archive_entry_filetype(entry) != AE_IFREG)
+        {
+            if (archive_read_data_skip(a) < ARCHIVE_OK)
+            {
+                read_ok = false;
+                break;
+            }
+            continue;
+        }
+
+        read_ok = stream_entry_to_file(a, out);
+        found_entry = true;
+        break;
+    }
+
     out.close();
-    return static_cast<bool>(out);
+    const int actual_format = archive_format(a) & ARCHIVE_FORMAT_BASE_MASK;
+    const bool format_matches = actual_format == expected_format ||
+        (format == CompressionFormat::Rar && actual_format == ARCHIVE_FORMAT_RAR_V5);
+    bool success = read_ok && static_cast<bool>(out) && format_matches &&
+        (found_entry || header_status == ARCHIVE_EOF);
+    if (stream)
+    {
+        // Some filters report EOF for non-matching input. Require a complete
+        // frame consumption as well as the explicitly selected filter chain.
+        const la_int64_t consumed = archive_filter_bytes(a, -1);
+        success = success && archive_filter_count(a) == 2 &&
+            archive_filter_code(a, 0) == expected_filter && consumed >= 0 &&
+            static_cast<uint64_t>(consumed) == static_cast<uint64_t>(source_size);
+    }
+    if (archive_read_close(a) < ARCHIVE_OK)
+        success = false;
+    if (!success)
+    {
+        LOG_ERROR("ic_decompress: invalid or mismatched compressed input");
+        delete_file(temp_path);
+        return false;
+    }
+    if (!replace_file(temp_path, dst))
+    {
+        delete_file(temp_path);
+        return false;
+    }
+    return true;
 }
 
 bool ic_decompress_file(std::string_view src, std::string_view dst, CompressionFormat format)
@@ -1660,27 +1929,17 @@ static bool ic_add_file_impl(int32_t handle, std::string_view path, std::string_
         return false;
     }
 
-    auto file_size = in.tellg();
+    const int64_t file_size = static_cast<int64_t>(in.tellg());
     if (file_size < 0)
         return false;
-    if (static_cast<uint64_t>(file_size) > MAX_FILE_READ_SIZE)
-    {
-        LOG_ERROR("ic_add_file: input file exceeds the configured size limit");
-        return false;
-    }
     in.seekg(0);
-
-    std::string file_data(static_cast<size_t>(file_size), '\0');
-    in.read(file_data.data(), file_size);
-    if (!in)
-        return false;
 
     struct archive_entry* ae = archive_entry_new();
     if (!ae)
         return false;
     archive_entry_set_pathname_utf8(ae, std::string(entry).c_str());
     archive_entry_set_filetype(ae, AE_IFREG);
-    archive_entry_set_size(ae, static_cast<la_int64_t>(file_data.size()));
+    archive_entry_set_size(ae, static_cast<la_int64_t>(file_size));
     archive_entry_set_perm(ae, 0644);
 
     int r = archive_write_header(a, ae);
@@ -1690,9 +1949,9 @@ static bool ic_add_file_impl(int32_t handle, std::string_view path, std::string_
         return false;
     }
 
-    const la_ssize_t written = archive_write_data(a, file_data.data(), file_data.size());
+    const bool ok = stream_file_to_entry(in, a, file_size);
     archive_entry_free(ae);
-    return written >= 0 && static_cast<size_t>(written) == file_data.size();
+    return ok;
 }
 
 bool ic_add_file(int32_t handle, std::string_view path, std::string_view entry)

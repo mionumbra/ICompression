@@ -91,7 +91,7 @@ repeat (65535) {
 - Maximum decompressed size per entry: 256 MiB, including sparse-file holes
 - Maximum Raw decompression output: 256 MiB
 - Maximum total full-extraction output: 1 GiB, including sparse-file holes
-- Maximum file API input size: 1 GiB
+- File APIs stream; no fixed file size limit
 - Maximum entries scanned: 65,535
 - Maximum extraction path length: 4,096 UTF-8 bytes
 - Maximum simultaneously open archive writers: 64
