@@ -11,8 +11,10 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <new>
 #include <sstream>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #ifdef OS_WINDOWS
@@ -25,6 +27,7 @@ using namespace gm_enums;
 
 static constexpr size_t MAX_ENTRY_SIZE = 256ull * 1024ull * 1024ull;
 static constexpr uint64_t MAX_TOTAL_EXTRACT_SIZE = 1024ull * 1024ull * 1024ull;
+static constexpr uint64_t MAX_FILE_READ_SIZE = 1024ull * 1024ull * 1024ull;
 static constexpr size_t MAX_ARCHIVE_ENTRIES = 65535;
 static constexpr size_t MAX_ENTRY_PATH_SIZE = 4096;
 static constexpr size_t MAX_LIST_PATH_SIZE = 256;
@@ -491,6 +494,77 @@ static int string_writer_open_cb(struct archive*, void*) { return ARCHIVE_OK; }
 static int string_writer_close_cb(struct archive*, void*) { return ARCHIVE_OK; }
 
 // =============================================================================
+// Exception boundary
+// =============================================================================
+
+// Failure sentinel for an exported return type, shaped like the ordinary
+// failure results of the functions returning it.
+template <typename R>
+static R failure_sentinel(const char* message)
+{
+    if constexpr (std::is_same_v<R, bool>)
+        return false;
+    else if constexpr (std::is_same_v<R, int32_t>)
+        return -1;
+    else if constexpr (std::is_same_v<R, CompressionFormat>)
+        return CompressionFormat::Raw;
+    else
+    {
+        R result{};
+        if constexpr (requires { result.error_message = message; })
+            result.error_message = message;
+        return result;
+    }
+}
+
+// An exception escaping an exported function would terminate the GameMaker
+// runner. Every exported entry point forwards to its _impl through this guard
+// and reports a caught exception as its ordinary failure result.
+template <typename F>
+static std::invoke_result_t<F> exception_guard(const char* name, F&& fn)
+{
+    using R = std::invoke_result_t<F>;
+    [[maybe_unused]] const char* message = nullptr;
+    try
+    {
+        return fn();
+    }
+    catch (const std::bad_alloc&)
+    {
+        message = "Out of memory";
+        LOG_ERROR("%s: out of memory", name);
+    }
+    catch (...)
+    {
+        message = "Unexpected internal error";
+        LOG_ERROR("%s: unexpected internal exception", name);
+    }
+
+    if constexpr (!std::is_void_v<R>)
+        return failure_sentinel<R>(message);
+}
+
+// Guard variant for entry points whose failure result carries request details
+// that a default-constructed sentinel cannot know.
+template <typename R, typename F>
+static R exception_guard(const char* name, const R& sentinel, F&& fn)
+{
+    try
+    {
+        return fn();
+    }
+    catch (const std::bad_alloc&)
+    {
+        LOG_ERROR("%s: out of memory", name);
+    }
+    catch (...)
+    {
+        LOG_ERROR("%s: unexpected internal exception", name);
+    }
+    return sentinel;
+}
+
+// =============================================================================
 // Stream compression / decompression
 // =============================================================================
 
@@ -685,7 +759,7 @@ static bool decompress_raw(std::string_view data, CompressionFormat format, std:
     return success;
 }
 
-std::string ic_compress(std::string_view data, CompressionFormat format, int32_t level)
+static std::string ic_compress_impl(std::string_view data, CompressionFormat format, int32_t level)
 {
     std::string compressed;
     if (!compress_raw(data, format, level, compressed))
@@ -693,7 +767,12 @@ std::string ic_compress(std::string_view data, CompressionFormat format, int32_t
     return base64_encode(compressed);
 }
 
-std::string ic_decompress(std::string_view data, CompressionFormat format)
+std::string ic_compress(std::string_view data, CompressionFormat format, int32_t level)
+{
+    return exception_guard("ic_compress", [&] { return ic_compress_impl(data, format, level); });
+}
+
+static std::string ic_decompress_impl(std::string_view data, CompressionFormat format)
 {
     std::string compressed;
     if (!base64_decode(data, compressed))
@@ -708,7 +787,12 @@ std::string ic_decompress(std::string_view data, CompressionFormat format)
     return result;
 }
 
-bool ic_compress_file(std::string_view src, std::string_view dst, CompressionFormat format, int32_t level)
+std::string ic_decompress(std::string_view data, CompressionFormat format)
+{
+    return exception_guard("ic_decompress", [&] { return ic_decompress_impl(data, format); });
+}
+
+static bool ic_compress_file_impl(std::string_view src, std::string_view dst, CompressionFormat format, int32_t level)
 {
     FOPEN_IFSTREAM(in, src, std::ios::binary | std::ios::ate);
     if (!in) return false;
@@ -716,6 +800,11 @@ bool ic_compress_file(std::string_view src, std::string_view dst, CompressionFor
     auto file_size = in.tellg();
     if (file_size < 0)
         return false;
+    if (static_cast<uint64_t>(file_size) > MAX_FILE_READ_SIZE)
+    {
+        LOG_ERROR("ic_compress_file: input file exceeds the configured size limit");
+        return false;
+    }
     in.seekg(0);
 
     std::string file_data(static_cast<size_t>(file_size), '\0');
@@ -733,7 +822,12 @@ bool ic_compress_file(std::string_view src, std::string_view dst, CompressionFor
     return static_cast<bool>(out);
 }
 
-bool ic_decompress_file(std::string_view src, std::string_view dst, CompressionFormat format)
+bool ic_compress_file(std::string_view src, std::string_view dst, CompressionFormat format, int32_t level)
+{
+    return exception_guard("ic_compress_file", [&] { return ic_compress_file_impl(src, dst, format, level); });
+}
+
+static bool ic_decompress_file_impl(std::string_view src, std::string_view dst, CompressionFormat format)
 {
     FOPEN_IFSTREAM(in, src, std::ios::binary | std::ios::ate);
     if (!in) return false;
@@ -741,6 +835,11 @@ bool ic_decompress_file(std::string_view src, std::string_view dst, CompressionF
     auto file_size = in.tellg();
     if (file_size < 0)
         return false;
+    if (static_cast<uint64_t>(file_size) > MAX_FILE_READ_SIZE)
+    {
+        LOG_ERROR("ic_decompress_file: input file exceeds the configured size limit");
+        return false;
+    }
     in.seekg(0);
 
     std::string file_data(static_cast<size_t>(file_size), '\0');
@@ -758,7 +857,12 @@ bool ic_decompress_file(std::string_view src, std::string_view dst, CompressionF
     return static_cast<bool>(out);
 }
 
-CompressResult ic_compress_buf(GMBuffer input, GMBuffer output, CompressionFormat format, int32_t level)
+bool ic_decompress_file(std::string_view src, std::string_view dst, CompressionFormat format)
+{
+    return exception_guard("ic_decompress_file", [&] { return ic_decompress_file_impl(src, dst, format); });
+}
+
+static CompressResult ic_compress_buf_impl(GMBuffer input, GMBuffer output, CompressionFormat format, int32_t level)
 {
     CompressResult result{};
     result.format = format;
@@ -796,7 +900,15 @@ CompressResult ic_compress_buf(GMBuffer input, GMBuffer output, CompressionForma
     return result;
 }
 
-BufferResult ic_compress_buf_range(GMBuffer input, int64_t input_offset, int64_t input_length,
+CompressResult ic_compress_buf(GMBuffer input, GMBuffer output, CompressionFormat format, int32_t level)
+{
+    CompressResult sentinel{};
+    sentinel.format = format;
+    return exception_guard("ic_compress_buf", sentinel,
+        [&] { return ic_compress_buf_impl(input, output, format, level); });
+}
+
+static BufferResult ic_compress_buf_range_impl(GMBuffer input, int64_t input_offset, int64_t input_length,
     GMBuffer output, int64_t output_offset, CompressionFormat format, int32_t level)
 {
     BufferResult result{};
@@ -832,7 +944,14 @@ BufferResult ic_compress_buf_range(GMBuffer input, int64_t input_offset, int64_t
     return result;
 }
 
-CompressResult ic_decompress_buf(GMBuffer input, GMBuffer output, CompressionFormat format)
+BufferResult ic_compress_buf_range(GMBuffer input, int64_t input_offset, int64_t input_length,
+    GMBuffer output, int64_t output_offset, CompressionFormat format, int32_t level)
+{
+    return exception_guard("ic_compress_buf_range",
+        [&] { return ic_compress_buf_range_impl(input, input_offset, input_length, output, output_offset, format, level); });
+}
+
+static CompressResult ic_decompress_buf_impl(GMBuffer input, GMBuffer output, CompressionFormat format)
 {
     CompressResult result{};
     result.format = format;
@@ -870,7 +989,15 @@ CompressResult ic_decompress_buf(GMBuffer input, GMBuffer output, CompressionFor
     return result;
 }
 
-BufferResult ic_decompress_buf_range(GMBuffer input, int64_t input_offset, int64_t input_length,
+CompressResult ic_decompress_buf(GMBuffer input, GMBuffer output, CompressionFormat format)
+{
+    CompressResult sentinel{};
+    sentinel.format = format;
+    return exception_guard("ic_decompress_buf", sentinel,
+        [&] { return ic_decompress_buf_impl(input, output, format); });
+}
+
+static BufferResult ic_decompress_buf_range_impl(GMBuffer input, int64_t input_offset, int64_t input_length,
     GMBuffer output, int64_t output_offset, CompressionFormat format)
 {
     BufferResult result{};
@@ -906,17 +1033,31 @@ BufferResult ic_decompress_buf_range(GMBuffer input, int64_t input_offset, int64
     return result;
 }
 
+BufferResult ic_decompress_buf_range(GMBuffer input, int64_t input_offset, int64_t input_length,
+    GMBuffer output, int64_t output_offset, CompressionFormat format)
+{
+    return exception_guard("ic_decompress_buf_range",
+        [&] { return ic_decompress_buf_range_impl(input, input_offset, input_length, output, output_offset, format); });
+}
+
 // =============================================================================
 // Archive operations
 // =============================================================================
 
-std::vector<ArchiveEntry> ic_list(std::string_view archive)
+static ListResult ic_list_page_impl(std::string_view archive, int32_t offset);
+
+static std::vector<ArchiveEntry> ic_list_impl(std::string_view archive)
 {
-    ListResult page = ic_list_page(archive, 0);
+    ListResult page = ic_list_page_impl(archive, 0);
     return page.success ? std::move(page.entries) : std::vector<ArchiveEntry>{};
 }
 
-ListResult ic_list_page(std::string_view archive, int32_t offset)
+std::vector<ArchiveEntry> ic_list(std::string_view archive)
+{
+    return exception_guard("ic_list", [&] { return ic_list_impl(archive); });
+}
+
+static ListResult ic_list_page_impl(std::string_view archive, int32_t offset)
 {
     ListResult result{};
     result.next_offset = offset;
@@ -1003,7 +1144,12 @@ ListResult ic_list_page(std::string_view archive, int32_t offset)
     return result;
 }
 
-ExtractResult ic_extract(std::string_view archive, std::string_view output_dir)
+ListResult ic_list_page(std::string_view archive, int32_t offset)
+{
+    return exception_guard("ic_list_page", [&] { return ic_list_page_impl(archive, offset); });
+}
+
+static ExtractResult ic_extract_impl(std::string_view archive, std::string_view output_dir)
 {
     ExtractResult result{};
     result.files_extracted = 0;
@@ -1202,7 +1348,12 @@ ExtractResult ic_extract(std::string_view archive, std::string_view output_dir)
     return result;
 }
 
-bool ic_extract_file(std::string_view archive, std::string_view entry, std::string_view output)
+ExtractResult ic_extract(std::string_view archive, std::string_view output_dir)
+{
+    return exception_guard("ic_extract", [&] { return ic_extract_impl(archive, output_dir); });
+}
+
+static bool ic_extract_file_impl(std::string_view archive, std::string_view entry, std::string_view output)
 {
     struct archive* a = archive_read_new();
     if (!a)
@@ -1248,7 +1399,12 @@ bool ic_extract_file(std::string_view archive, std::string_view entry, std::stri
     return found;
 }
 
-std::string ic_extract_mem(std::string_view archive, std::string_view entry)
+bool ic_extract_file(std::string_view archive, std::string_view entry, std::string_view output)
+{
+    return exception_guard("ic_extract_file", [&] { return ic_extract_file_impl(archive, entry, output); });
+}
+
+static std::string ic_extract_mem_impl(std::string_view archive, std::string_view entry)
 {
     struct archive* a = archive_read_new();
     if (!a)
@@ -1299,7 +1455,12 @@ std::string ic_extract_mem(std::string_view archive, std::string_view entry)
     return result;
 }
 
-BufferResult ic_extract_buf(std::string_view archive, std::string_view entry,
+std::string ic_extract_mem(std::string_view archive, std::string_view entry)
+{
+    return exception_guard("ic_extract_mem", [&] { return ic_extract_mem_impl(archive, entry); });
+}
+
+static BufferResult ic_extract_buf_impl(std::string_view archive, std::string_view entry,
     GMBuffer output, int64_t output_offset)
 {
     BufferResult result{};
@@ -1367,6 +1528,13 @@ BufferResult ic_extract_buf(std::string_view archive, std::string_view entry,
     return result;
 }
 
+BufferResult ic_extract_buf(std::string_view archive, std::string_view entry,
+    GMBuffer output, int64_t output_offset)
+{
+    return exception_guard("ic_extract_buf",
+        [&] { return ic_extract_buf_impl(archive, entry, output, output_offset); });
+}
+
 // =============================================================================
 // Archive creation (handle-based)
 // =============================================================================
@@ -1388,7 +1556,7 @@ static int32_t allocate_archive_handle()
     return -1;
 }
 
-int32_t ic_create(std::string_view archive, CompressionFormat format)
+static int32_t ic_create_impl(std::string_view archive, CompressionFormat format)
 {
     if (g_archive_writers.size() >= MAX_OPEN_ARCHIVES)
     {
@@ -1428,7 +1596,12 @@ int32_t ic_create(std::string_view archive, CompressionFormat format)
     return handle;
 }
 
-bool ic_add_file(int32_t handle, std::string_view path, std::string_view entry)
+int32_t ic_create(std::string_view archive, CompressionFormat format)
+{
+    return exception_guard("ic_create", [&] { return ic_create_impl(archive, format); });
+}
+
+static bool ic_add_file_impl(int32_t handle, std::string_view path, std::string_view entry)
 {
     auto it = g_archive_writers.find(handle);
     if (it == g_archive_writers.end()) return false;
@@ -1445,6 +1618,11 @@ bool ic_add_file(int32_t handle, std::string_view path, std::string_view entry)
     auto file_size = in.tellg();
     if (file_size < 0)
         return false;
+    if (static_cast<uint64_t>(file_size) > MAX_FILE_READ_SIZE)
+    {
+        LOG_ERROR("ic_add_file: input file exceeds the configured size limit");
+        return false;
+    }
     in.seekg(0);
 
     std::string file_data(static_cast<size_t>(file_size), '\0');
@@ -1472,7 +1650,12 @@ bool ic_add_file(int32_t handle, std::string_view path, std::string_view entry)
     return written >= 0 && static_cast<size_t>(written) == file_data.size();
 }
 
-bool ic_add_data(int32_t handle, std::string_view entry, std::string_view data)
+bool ic_add_file(int32_t handle, std::string_view path, std::string_view entry)
+{
+    return exception_guard("ic_add_file", [&] { return ic_add_file_impl(handle, path, entry); });
+}
+
+static bool ic_add_data_impl(int32_t handle, std::string_view entry, std::string_view data)
 {
     auto it = g_archive_writers.find(handle);
     if (it == g_archive_writers.end()) return false;
@@ -1499,17 +1682,29 @@ bool ic_add_data(int32_t handle, std::string_view entry, std::string_view data)
     return written >= 0 && static_cast<size_t>(written) == data.size();
 }
 
-bool ic_add_buf(int32_t handle, std::string_view entry, GMBuffer data,
+bool ic_add_data(int32_t handle, std::string_view entry, std::string_view data)
+{
+    return exception_guard("ic_add_data", [&] { return ic_add_data_impl(handle, entry, data); });
+}
+
+static bool ic_add_buf_impl(int32_t handle, std::string_view entry, GMBuffer data,
     int64_t data_offset, int64_t data_length)
 {
     const char* input_data = nullptr;
     size_t input_size = 0;
     if (!get_buffer_range(data, data_offset, data_length, input_data, input_size))
         return false;
-    return ic_add_data(handle, entry, std::string_view(input_data, input_size));
+    return ic_add_data_impl(handle, entry, std::string_view(input_data, input_size));
 }
 
-bool ic_close(int32_t handle)
+bool ic_add_buf(int32_t handle, std::string_view entry, GMBuffer data,
+    int64_t data_offset, int64_t data_length)
+{
+    return exception_guard("ic_add_buf",
+        [&] { return ic_add_buf_impl(handle, entry, data, data_offset, data_length); });
+}
+
+static bool ic_close_impl(int32_t handle)
 {
     auto it = g_archive_writers.find(handle);
     if (it == g_archive_writers.end()) return false;
@@ -1521,7 +1716,12 @@ bool ic_close(int32_t handle)
     return close_status >= ARCHIVE_OK && free_status >= ARCHIVE_OK;
 }
 
-void ic_shutdown()
+bool ic_close(int32_t handle)
+{
+    return exception_guard("ic_close", [&] { return ic_close_impl(handle); });
+}
+
+static void ic_shutdown_impl()
 {
     for (auto& writer : g_archive_writers)
     {
@@ -1532,17 +1732,27 @@ void ic_shutdown()
     g_next_handle = 1;
 }
 
+void ic_shutdown()
+{
+    exception_guard("ic_shutdown", [&] { ic_shutdown_impl(); });
+}
+
 // =============================================================================
 // Utility functions
 // =============================================================================
 
-CompressionFormat ic_detect(GMBuffer data)
+static CompressionFormat ic_detect_impl(GMBuffer data)
 {
     std::string_view view(static_cast<const char*>(data.data()), static_cast<size_t>(data.length()));
     return detect_from_magic(view);
 }
 
-CompressionFormat ic_detect_file(std::string_view path)
+CompressionFormat ic_detect(GMBuffer data)
+{
+    return exception_guard("ic_detect", [&] { return ic_detect_impl(data); });
+}
+
+static CompressionFormat ic_detect_file_impl(std::string_view path)
 {
     FOPEN_IFSTREAM(in, path, std::ios::binary);
     if (!in) return CompressionFormat::Raw;
@@ -1558,12 +1768,27 @@ CompressionFormat ic_detect_file(std::string_view path)
     return detect_from_magic(sv);
 }
 
-CompressionFormat ic_from_ext(std::string_view name)
+CompressionFormat ic_detect_file(std::string_view path)
+{
+    return exception_guard("ic_detect_file", [&] { return ic_detect_file_impl(path); });
+}
+
+static CompressionFormat ic_from_ext_impl(std::string_view name)
 {
     return detect_from_ext(name);
 }
 
-std::string ic_to_str(CompressionFormat format)
+CompressionFormat ic_from_ext(std::string_view name)
+{
+    return exception_guard("ic_from_ext", [&] { return ic_from_ext_impl(name); });
+}
+
+static std::string ic_to_str_impl(CompressionFormat format)
 {
     return format_to_str(format);
+}
+
+std::string ic_to_str(CompressionFormat format)
+{
+    return exception_guard("ic_to_str", [&] { return ic_to_str_impl(format); });
 }
