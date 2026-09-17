@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.4.5 — Pre-release (2026-09-17)
+
+- Add regression tests for extraction rejection of absolute paths, `..` traversal, symlinks, hardlinks, and special files, plus boundary tests for entry path length, listing path length, entry scan count, and non-sparse entry size limits.
+- Guard every exported function so no exception can escape into the GameMaker runner, and reject file API inputs larger than 1 GiB before reading them.
+- Extend release preflight to 62 checks covering the test-summary gate, credential exclusion, staging contents, checksums, and build information.
+- Advance the source extension version seed to the shipped version after each successful release, never rewinding a newer seed, so fresh clones cannot re-issue a released build number.
+- Fail the release when the GameMaker runtime version is missing from the test log.
+- Rewrite the stale diagnostics script for the buffer-based detection API and align the generated API script path casing.
+- Work around a Windows VM runner crash when probing overlong paths in tests.
+
 ## 1.0.3.2 — Pre-release (2026-09-16)
 
 - Automatically increment the fourth version field after each successful DLL link, including local builds.

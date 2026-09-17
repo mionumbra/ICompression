@@ -1,5 +1,5 @@
 {
-  "$GMExtension":"",
+  "$GMExtension":"v1",
   "%Name":"ICompression",
   "androidactivityinject":null,
   "androidclassname":"",
@@ -14,7 +14,7 @@
   "copyToTargets":64,
   "description":"Advanced compression/decompression library",
   "exportToGame":true,
-  "extensionVersion":"1.0.3.1",
+  "extensionVersion":"1.0.4.5",
   "files":[
     {"$GMExtensionFile":"v1","%Name":"","constants":[],"copyToTargets":-1,"filename":"ICompression.ext","final":"ic_shutdown","functions":[
         {"$GMExtensionFunction":"","%Name":"__ic_compress","argCount":2,"args":[1,2,],"documentation":"@param {Pointer} _arg_buffer\r\n@param {Real} _arg_buffer_length\r\n@returns {String}","externalName":"__EXT_NATIVE__ic_compress","help":"","hidden":true,"kind":4,"name":"__ic_compress","resourceType":"GMExtensionFunction","resourceVersion":"2.0","returnType":1,},
@@ -62,8 +62,10 @@
   "iosSystemFrameworkEntries":[],
   "iosThirdPartyFrameworkEntries":[],
   "license":"MIT",
+  "maccodeinjection":"",
   "maccompilerflags":"",
   "maclinkerflags":"",
+  "macProps":false,
   "macsourcedir":"",
   "name":"ICompression",
   "options":[],

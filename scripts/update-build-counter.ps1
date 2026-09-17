@@ -89,6 +89,16 @@ try {
             !$state.Contains('last_builds') -or $state.last_builds -isnot [Collections.IDictionary] -or
             !$state.Contains('artifacts') -or $state.artifacts -isnot [Collections.IDictionary]) { throw 'Invalid build counter state; refusing to reset it.' }
     }
+    # cycle_builds counts builds since the last release; state written before
+    # this field existed starts at zero. A present value must be a valid count.
+    $cycleBuilds = 0
+    if ($state.Contains('cycle_builds')) {
+        if (($state.cycle_builds -isnot [int] -and $state.cycle_builds -isnot [long]) -or
+            $state.cycle_builds -lt 0 -or $state.cycle_builds -gt 65535) {
+            throw 'Invalid persisted cycle build count; refusing to reset it.'
+        }
+        $cycleBuilds = [int]$state.cycle_builds
+    }
     $artifactKey = $Binary.ToLowerInvariant()
     $currentHash = (Get-FileHash -LiteralPath $Binary -Algorithm SHA256).Hash
     $currentTicks = [IO.File]::GetLastWriteTimeUtc($Binary).Ticks.ToString()
@@ -101,8 +111,9 @@ try {
             return
         }
     }
-    # Bootstrap from the last checked-in version on first adoption. Once state
-    # exists, an unseen three-field base starts at 1 regardless of its old suffix.
+    # Bootstrap from the last checked-in version on first adoption. With existing
+    # state, an unseen three-field base continues the release cycle: its first
+    # build receives the count of builds since the last release, itself included.
     $last = 0
     if ($state.last_builds.Contains($baseVersion)) {
         $lastText = [string]$state.last_builds[$baseVersion]
@@ -111,6 +122,7 @@ try {
         }
         $last = [int]$lastText
     } elseif ($freshState) { $last = [int]$parts[3] }
+    else { $last = $cycleBuilds }
     if ($last -ge 65535) { throw 'Build number exhausted; increment the functional version before compiling again.' }
     $next = $last + 1
     $version = "$baseVersion.$next"
@@ -154,6 +166,7 @@ try {
         $replaced = $true
         $receipt.binary_write_ticks = [IO.File]::GetLastWriteTimeUtc($Binary).Ticks.ToString()
         $state.last_builds[$baseVersion] = $next
+        $state.cycle_builds = $cycleBuilds + 1
         $state.artifacts[$artifactKey] = $receipt
         Write-AtomicText $statePath ($state | ConvertTo-Json -Depth 20)
         $committed = $true

@@ -36,7 +36,7 @@ function Snapshot([string]$Tree) {
     return @((Get-FileHash -LiteralPath $dll).Hash, (Get-FileHash -LiteralPath "$dll.build.json").Hash,
         (Get-FileHash -LiteralPath $statePath).Hash, [IO.File]::GetLastWriteTimeUtc($dll).Ticks.ToString()) -join '|'
 }
-function Verify([string]$Tree, [string]$Version, [string]$Label) {
+function Verify([string]$Tree, [string]$Version, [string]$Label, [int]$CycleBuilds = -1) {
     $dll = Join-Path $Tree 'Release\ICompression.dll'
     $receipt = Get-Content -Raw -LiteralPath "$dll.build.json" | ConvertFrom-Json
     $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($dll)
@@ -49,6 +49,7 @@ function Verify([string]$Tree, [string]$Version, [string]$Label) {
     Assert-Check ((Get-FileHash -LiteralPath (Join-Path $output 'ICompression.dll.build.json')).Hash -ceq (Get-FileHash -LiteralPath "$dll.build.json").Hash) "$Label copied receipt mismatch"
     $state = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json -AsHashtable
     Assert-Check ($state.last_builds[$receipt.base_version] -eq $receipt.build_number) "$Label persistent counter mismatch"
+    if ($CycleBuilds -ge 0) { Assert-Check ([int]$state.cycle_builds -eq $CycleBuilds) "$Label cycle counter mismatch" }
     $script:passed++
     Write-Output "PASS $Label ($Version)"
 }
@@ -79,25 +80,31 @@ ic_enable_build_counter(ICompression
     $cmakeText.Replace('@REPOSITORY@', $repository.Replace('\','/')).Replace('@OUTPUT@',$output.Replace('\','/')) |
         Set-Content -LiteralPath (Join-Path $source 'CMakeLists.txt') -Encoding utf8NoBOM
     Write-Version '1.0.3.0'; Write-Source 1; Configure $build
-    Build $build 'first'; Verify $build '1.0.3.1' 'First successful build'
+    Build $build 'first'; Verify $build '1.0.3.1' 'First successful build' 1
     $before = Snapshot $build
     Build $build 'no-op'
     Assert-Check ((Snapshot $build) -ceq $before) 'No-op build changed the DLL, receipt, or counter'
     $passed++; Write-Output 'PASS No-op build does not count'
-    Write-Source 2; Build $build 'changed-source'; Verify $build '1.0.3.2' 'Changed source'
+    Write-Source 2; Build $build 'changed-source'; Verify $build '1.0.3.2' 'Changed source' 2
     $before = Snapshot $build
     [IO.File]::WriteAllText((Join-Path $source 'probe.cpp'), 'this is deliberately invalid C++')
     Build $build 'failed-compile' $true
     Assert-Check ((Snapshot $build) -ceq $before) 'Failed compilation changed the DLL, receipt, or counter'
     $passed++; Write-Output 'PASS Failed compilation does not count'
-    Write-Source 3; Build $build 'fixed-compile'; Verify $build '1.0.3.3' 'Fixed compilation'
+    Write-Source 3; Build $build 'fixed-compile'; Verify $build '1.0.3.3' 'Fixed compilation' 3
     $otherBuild = Join-Path $fixture 'build-other'
-    Configure $otherBuild; Build $otherBuild 'other-tree'; Verify $otherBuild '1.0.3.4' 'Another build directory shares counter'
-    Build $build 'clean-first' $false -Clean; Verify $build '1.0.3.5' 'Clean rebuild preserves counter'
-    Write-Version '1.0.4.99'; Build $build 'new-base'; Verify $build '1.0.4.1' 'Functional version change resets count'
-    Write-Source 4; Build $build 'new-base-second'; Verify $build '1.0.4.2' 'New base second build'
+    Configure $otherBuild; Build $otherBuild 'other-tree'; Verify $otherBuild '1.0.3.4' 'Another build directory shares counter' 4
+    Build $build 'clean-first' $false -Clean; Verify $build '1.0.3.5' 'Clean rebuild preserves counter' 5
+    Write-Version '1.0.4.99'; Build $build 'new-base'; Verify $build '1.0.4.6' 'New base continues the release cycle' 6
+    Write-Source 4; Build $build 'new-base-second'; Verify $build '1.0.4.7' 'New base second build' 7
     $state = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json -AsHashtable
-    Assert-Check ($state.last_builds['1.0.3'] -eq 5 -and $state.last_builds['1.0.4'] -eq 2) 'Counter lost prior base history'
+    Assert-Check ($state.last_builds['1.0.3'] -eq 5 -and $state.last_builds['1.0.4'] -eq 7) 'Counter lost prior base history'
+    Write-Version '1.0.5.0'; Build $build 'cycle-second-base'; Verify $build '1.0.5.8' 'Second new base counts the whole cycle' 8
+    Write-Version '1.0.3.0'; Build $build 'resume-base'; Verify $build '1.0.3.6' 'Returning base resumes its recorded count' 9
+    # Simulate a completed release: release.ps1 resets the cycle count to zero.
+    $state.cycle_builds = 0
+    [IO.File]::WriteAllText($statePath, ($state | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+    Write-Version '1.0.6.0'; Build $build 'after-release'; Verify $build '1.0.6.1' 'New base after a release counts the new cycle' 1
     $savedState = [IO.File]::ReadAllText($statePath)
     $before = Snapshot $build
     $updater = Join-Path $repository 'scripts\update-build-counter.ps1'
@@ -119,6 +126,32 @@ ic_enable_build_counter(ICompression
     } finally { [IO.File]::WriteAllText($statePath, $savedState) }
     Assert-Check ((Snapshot $build) -ceq $before) 'Invalid-state failure changed the completed artifact'
     $passed++; Write-Output 'PASS Corrupt state fails without changing the DLL'
+    try {
+        $tampered = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json -AsHashtable
+        $tampered.cycle_builds = 70000
+        [IO.File]::WriteAllText($statePath, ($tampered | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+        & pwsh @updateArgs *> (Join-Path $fixture 'cycle-overflow.log')
+        Assert-Check ($LASTEXITCODE -ne 0) 'Cycle count above 65535 was silently accepted'
+        $tampered.cycle_builds = 'seven'
+        [IO.File]::WriteAllText($statePath, ($tampered | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+        & pwsh @updateArgs *> (Join-Path $fixture 'cycle-nonnumeric.log')
+        Assert-Check ($LASTEXITCODE -ne 0) 'Non-numeric cycle count was silently accepted'
+    } finally { [IO.File]::WriteAllText($statePath, $savedState) }
+    Assert-Check ((Snapshot $build) -ceq $before) 'Cycle-count validation changed the completed artifact'
+    $passed++; Write-Output 'PASS Invalid cycle count state fails without changing the DLL'
+    # A new base continuing the cycle must hit the same 65535 exhaustion guard.
+    try {
+        $tampered = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json -AsHashtable
+        $tampered.cycle_builds = 65535
+        [IO.File]::WriteAllText($statePath, ($tampered | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+        Write-Version '1.0.7.0'
+        Build $build 'cycle-exhausted' $true
+        Assert-Check ((Get-Content -Raw -LiteralPath (Join-Path $fixture 'cycle-exhausted.log')) -match 'Build number exhausted') 'New-base cycle exhaustion was not reported'
+    } finally {
+        [IO.File]::WriteAllText($statePath, $savedState)
+        Write-Version '1.0.6.0'
+    }
+    $passed++; Write-Output 'PASS New base at cycle 65535 refuses the build number'
     $complete = $true
     Write-Output "Build counter checks: $passed passed"
 } finally {

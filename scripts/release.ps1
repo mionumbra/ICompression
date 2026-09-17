@@ -251,6 +251,7 @@ foreach ($relative in $files) {
 
 # ResourceTool needs the complete project context. Copy tracked resources from
 # this source tree and add generated runtime files; local settings/cache stay out.
+$resourceCache = if ($GameMakerCacheDirectory) { $GameMakerCacheDirectory } else { Join-Path $root 'project\.gmcache' }
 $resourceTemp = Assert-ChildPath (Join-Path $root ('out\release-resources-' + [guid]::NewGuid().ToString('N'))) $root
 try {
     $trackedProject = Read-ToolOutput 'git' @('-C', $workspace, '-c', 'core.quotepath=false', 'ls-files', '--', 'project')
@@ -266,7 +267,6 @@ try {
         New-Item -ItemType Directory -Path (Split-Path -Parent $resourceDestination) -Force | Out-Null
         Copy-Item -LiteralPath $resourceSource -Destination $resourceDestination
     }
-    $resourceCache = if ($GameMakerCacheDirectory) { $GameMakerCacheDirectory } else { Join-Path $root 'project\.gmcache' }
     $resourceArgs = @((Join-Path $PSScriptRoot 'set-extension-version.cjs'), '--project', (Join-Path $resourceTemp 'project\ICompression.yyp'),
         '--version', $Version, '--cache-dir', $resourceCache)
     if ($ResourceToolPath) { $resourceArgs += @('--resource-tool', $ResourceToolPath) }
@@ -307,6 +307,9 @@ foreach ($item in $licenses.GetEnumerator()) {
 
 $runtimeVersions = @([regex]::Matches($testOutput, 'runtime-([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)') |
     ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+# The shipped build-info must name the runtime that ran the tests; a silently
+# empty list would hide a scrape regression, so fail like the summary gate.
+if (!$runtimeVersions.Count) { throw "GameMaker runtime version is missing from the test log; see $testLog" }
 [ordered]@{
     extension_version = $Version
     base_version = $receipt.base_version
@@ -329,8 +332,60 @@ Get-ChildItem -LiteralPath $stage -Recurse -File | Sort-Object FullName |
     Get-FileHash -Algorithm SHA256 |
     ForEach-Object { "$($_.Hash)  $($_.Path.Substring($stage.Length + 1).Replace('\', '/'))" } |
     Set-Content -LiteralPath (Join-Path $stage 'SHA256SUMS.txt') -Encoding ascii
+# Fresh clones seed their build counter from the source metadata's fourth
+# field, so it must reach the shipped version before the archive exists: a
+# ResourceTool failure aborts with no ZIP, and a later packaging failure still
+# leaves a correct seed because this exact DLL passed every gate. Never rewind:
+# repackaging an older build keeps the newer seed.
+if ($receipt.build_number -ge [int]$sourceVersion.Split('.')[3]) {
+    $seedArgs = @((Join-Path $PSScriptRoot 'set-extension-version.cjs'), '--project', $project,
+        '--version', $Version, '--cache-dir', $resourceCache)
+    if ($ResourceToolPath) { $seedArgs += @('--resource-tool', $ResourceToolPath) }
+    & node @seedArgs
+    if ($LASTEXITCODE -ne 0) { throw 'ResourceTool failed to advance the source extension version seed' }
+    $seededExtension = Get-Content -Raw -LiteralPath $extensionPath | ConvertFrom-Json
+    if ($seededExtension.extensionVersion -cne $Version -or (Get-ExtensionAbi $extension) -cne (Get-ExtensionAbi $seededExtension)) {
+        throw 'ResourceTool changed the source extension ABI or failed to persist the version seed'
+    }
+}
+else { Write-Host "Source seed $sourceVersion is newer than the packaged build $Version; leaving the seed unchanged" }
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -CompressionLevel Optimal
 $archiveHash = Get-FileHash -Algorithm SHA256 -LiteralPath $archive
 "$($archiveHash.Hash)  $(Split-Path -Leaf $archive)" |
     Set-Content -LiteralPath "${archive}.sha256" -Encoding ascii
+# The release cycle is closed: reset the build counter's cycle count so the next
+# functional version starts counting from zero. The state directory is resolved
+# like the build does (IC_BUILD_STATE_DIR in the build tree's CMake cache,
+# falling back to .build-state). Best-effort: the ZIP and sidecar are already
+# written, so any failure here only warns.
+try {
+    $counterStateDir = Join-Path $root '.build-state'
+    $releaseCachePath = Join-Path $build 'CMakeCache.txt'
+    if (Test-Path -LiteralPath $releaseCachePath -PathType Leaf) {
+        $stateDirSetting = Read-CacheValue (Get-Content -Raw -LiteralPath $releaseCachePath) 'IC_BUILD_STATE_DIR'
+        if ($stateDirSetting) { $counterStateDir = [IO.Path]::GetFullPath($stateDirSetting, $root) }
+    }
+    $counterStatePath = Join-Path $counterStateDir 'counter.json'
+    if (!(Test-Path -LiteralPath $counterStateDir -PathType Container)) { throw "Build counter state directory is missing: $counterStateDir" }
+    if (!(Test-Path -LiteralPath $counterStatePath -PathType Leaf)) { throw "Build counter state is missing: $counterStatePath" }
+    $counterLockPath = Join-Path $counterStateDir 'counter.lock'
+    $counterLock = $null
+    $counterDeadline = [DateTime]::UtcNow.AddSeconds(60)
+    while (!$counterLock) {
+        try { $counterLock = [IO.File]::Open($counterLockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
+        catch [IO.IOException] {
+            if ([DateTime]::UtcNow -ge $counterDeadline) { throw "Timed out waiting for the build counter lock: $counterLockPath" }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+    try {
+        $counterState = [IO.File]::ReadAllText($counterStatePath) | ConvertFrom-Json -AsHashtable
+        $counterState.cycle_builds = 0
+        $counterTemporary = $counterStatePath + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+        try {
+            [IO.File]::WriteAllText($counterTemporary, ($counterState | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+            [IO.File]::Move($counterTemporary, $counterStatePath, $true)
+        } finally { if ([IO.File]::Exists($counterTemporary)) { [IO.File]::Delete($counterTemporary) } }
+    } finally { $counterLock.Dispose() }
+} catch { Write-Host "WARNING: the release cycle counter was not reset: $($_.Exception.Message)" }
 $archiveHash
