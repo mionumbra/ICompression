@@ -70,6 +70,17 @@ try {
         ($buildInfo.yyc_tests.failed -ne 0 -or $buildInfo.yyc_tests.total -le 0 -or $buildInfo.yyc_tests.passed -ne $buildInfo.yyc_tests.total)) {
         throw 'Release metadata does not record a fully passing YYC test run'
     }
+    # Windows-only releases stay valid; a recorded macOS binary must be present
+    # in the bundle and match its recorded checksum.
+    if ($null -ne $buildInfo.PSObject.Properties['macos_binary']) {
+        if (!$files.ContainsKey('project/extensions/ICompression/libICompression.dylib')) {
+            throw 'macOS binary is recorded in build-info but missing from the package'
+        }
+        if ($buildInfo.macos_binary.sha256 -and
+            (Get-ZipHash 'project/extensions/ICompression/libICompression.dylib') -cne $buildInfo.macos_binary.sha256) {
+            throw 'macOS binary checksum does not match build-info'
+        }
+    }
     if (@($files.Keys | Where-Object { $_ -match '(^|/)(\.git|\.gmcache|\.mcp\.json|AGENTS\.md|CLAUDE\.md|gm-options\.json)(/|$)|licence\.plist' }).Count) {
         throw 'Cache, local settings, or a private license was packaged'
     }

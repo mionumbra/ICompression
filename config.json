@@ -29,6 +29,10 @@
     "windows": {
       "enabled": true,
       "outputFolder": "./project/extensions/ICompression"
+    },
+    "macos": {
+      "enabled": true,
+      "outputFolder": "./project/extensions/ICompression"
     }
   },
   "extras": {

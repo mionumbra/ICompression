@@ -2,8 +2,10 @@
 # extension generator's copy commands. Stamp then recopy the final DLL/receipt.
 function(ic_enable_build_counter target)
   cmake_parse_arguments(IC "" "METADATA;STATE_DIRECTORY;SOURCE_DIRECTORY;OUTPUT_DIRECTORY" "" ${ARGN})
+  # The stamp step shells out to a Windows-only PowerShell counter; other
+  # platforms skip version stamping and ship the unstamped library.
   if(NOT WIN32)
-    message(FATAL_ERROR "Automatic ICompression DLL build numbering requires Windows")
+    return()
   endif()
   foreach(required IN ITEMS METADATA STATE_DIRECTORY SOURCE_DIRECTORY)
     if(NOT IC_${required})

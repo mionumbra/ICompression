@@ -8,7 +8,8 @@ param(
     [switch]$OnlyPackage,
     [string]$ResourceToolPath,
     [switch]$YycTests,
-    [string]$YycVsDevCmd
+    [string]$YycVsDevCmd,
+    [string]$MacOsBinary
 )
 
 $ErrorActionPreference = "Stop"
@@ -122,6 +123,22 @@ if ($YycTests) {
     }
 }
 elseif ($PSBoundParameters.ContainsKey('YycVsDevCmd')) { throw 'YycVsDevCmd requires -YycTests' }
+$macOsHash = $null
+if ($PSBoundParameters.ContainsKey('MacOsBinary')) {
+    if ([string]::IsNullOrWhiteSpace($MacOsBinary)) { throw 'MacOsBinary must not be empty' }
+    $MacOsBinary = [IO.Path]::GetFullPath($MacOsBinary, $root)
+    if (!(Test-Path -LiteralPath $MacOsBinary -PathType Leaf)) { throw "MacOsBinary does not exist: $MacOsBinary" }
+    if ([IO.Path]::GetFileName($MacOsBinary) -cne 'libICompression.dylib') {
+        throw "MacOsBinary must be named libICompression.dylib: $MacOsBinary"
+    }
+    # Mach-O 32/64-bit and fat/universal headers, little- and big-endian forms.
+    $macOsBytes = [IO.File]::ReadAllBytes($MacOsBinary)
+    $macOsMagic = if ($macOsBytes.Length -ge 4) { [BitConverter]::ToString($macOsBytes[0..3]).Replace('-', '') } else { '' }
+    if ($macOsMagic -notin @('FEEDFACE', 'FEEDFACF', 'CEFAEDFE', 'CFFAEDFE', 'CAFEBABE', 'BEBAFECA')) {
+        throw 'MacOsBinary is not a Mach-O or universal binary (bad magic bytes)'
+    }
+    $macOsHash = (Get-FileHash -LiteralPath $MacOsBinary -Algorithm SHA256).Hash
+}
 $cachePath = Join-Path $build 'CMakeCache.txt'
 if (Test-Path -LiteralPath $cachePath -PathType Leaf) {
     $cache = Get-Content -Raw -LiteralPath $cachePath
@@ -294,6 +311,11 @@ foreach ($relative in $files) {
     New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
     Copy-Item -LiteralPath $source -Destination $destination
 }
+# An optional macOS universal binary ships alongside the Windows DLL (the .yy
+# proxy entry selects it per target platform).
+if ($MacOsBinary) {
+    Copy-Item -LiteralPath $MacOsBinary -Destination (Join-Path $stage 'project\extensions\ICompression\libICompression.dylib')
+}
 
 # ResourceTool needs the complete project context. Copy tracked resources from
 # this source tree and add generated runtime files; local settings/cache stay out.
@@ -312,6 +334,11 @@ try {
         $resourceDestination = Assert-ChildPath (Join-Path $resourceTemp $relative) $resourceTemp
         New-Item -ItemType Directory -Path (Split-Path -Parent $resourceDestination) -Force | Out-Null
         Copy-Item -LiteralPath $resourceSource -Destination $resourceDestination
+    }
+    # Keep the staged ResourceTool project consistent when the .yy references
+    # the macOS proxy binary; it is untracked, so ls-files never supplies it.
+    if ($MacOsBinary) {
+        Copy-Item -LiteralPath $MacOsBinary -Destination (Assert-ChildPath (Join-Path $resourceTemp 'project\extensions\ICompression\libICompression.dylib') $resourceTemp)
     }
     $resourceArgs = @((Join-Path $PSScriptRoot 'set-extension-version.cjs'), '--project', (Join-Path $resourceTemp 'project\ICompression.yyp'),
         '--version', $Version, '--cache-dir', $resourceCache)
@@ -376,6 +403,9 @@ $buildInfo = [ordered]@{
 }
 if ($yycSummaries) {
     $buildInfo.yyc_tests = [ordered]@{ total = [int]$yycSummaries[-1].Groups[1].Value; passed = [int]$yycSummaries[-1].Groups[2].Value; failed = 0 }
+}
+if ($MacOsBinary) {
+    $buildInfo.macos_binary = [ordered]@{ sha256 = $macOsHash }
 }
 $buildInfo | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $stage 'build-info.json') -Encoding utf8NoBOM
 Get-ChildItem -LiteralPath $stage -Recurse -File | Sort-Object FullName |

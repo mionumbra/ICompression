@@ -146,3 +146,121 @@ jobs:
           name: gamemaker-tests
           path: out/ci-build/gamemaker-tests.log
           if-no-files-found: ignore
+
+  build-and-test-macos:
+    needs: script-tests
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache extgen
+        id: extgen-cache
+        uses: actions/cache@v4
+        with:
+          path: out/ci-extgen
+          key: extgen-v1.1.0-${{ runner.os }}
+
+      # Pinned binary release (same tag as the Windows job): tag v1.1.0
+      # targets commit d8c68bd, so the tool reports exactly `extgen v1.d8c68bd`.
+      - name: Download extgen v1.1.0 release
+        if: steps.extgen-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path out -Force | Out-Null
+          $zip = 'out/extgen.zip'
+          Invoke-WebRequest -Uri 'https://github.com/YoYoGames/GM-ExtensionGenerator/releases/download/v1.1.0/ExtensionGenerator-osx-arm64.zip' -OutFile $zip
+          Expand-Archive -LiteralPath $zip -DestinationPath 'out/ci-extgen'
+          Remove-Item $zip
+          # ZIPs do not preserve executable bits.
+          chmod +x out/ci-extgen/extgen
+
+      - name: Verify extgen pin and add to PATH
+        shell: pwsh
+        run: |
+          Add-Content $env:GITHUB_PATH "$PWD/out/ci-extgen"
+          $extgenOutput = (& "$PWD/out/ci-extgen/extgen" --help 2>&1 | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "extgen failed (exit $LASTEXITCODE): $extgenOutput" }
+          if ($extgenOutput -notmatch '\bextgen v1\.(d8c68bd|225bddc)\b') { throw "Expected extgen v1.d8c68bd or v1.225bddc; found: $extgenOutput" }
+
+      - name: Generate CMake build files
+        shell: pwsh
+        run: extgen --config config.json
+
+      # _deps holds the FetchContent downloads of the third-party sources;
+      # the macOS presets build under out/build/<preset>.
+      - name: Cache CMake dependencies
+        uses: actions/cache@v4
+        with:
+          path: out/build/macos-release/_deps
+          key: cmake-deps-${{ runner.os }}-${{ hashFiles('third_party/CMakeLists.txt') }}
+          restore-keys: cmake-deps-${{ runner.os }}-
+
+      # The extgen-generated macOS presets use Ninja; runners may lack it.
+      - name: Ensure Ninja
+        shell: pwsh
+        run: if (!(Get-Command ninja -ErrorAction SilentlyContinue)) { brew install ninja }
+
+      - name: Configure (universal arm64+x86_64)
+        shell: pwsh
+        run: cmake --preset macos-release
+
+      # The build counter is Windows-only by design (early-returns elsewhere),
+      # so no .build-state handling on this job.
+      - name: Build Release dylib
+        shell: pwsh
+        run: cmake --build --preset macos-release
+
+      - name: Verify universal dylib
+        shell: pwsh
+        run: |
+          $dylib = "$PWD/project/extensions/ICompression/libICompression.dylib"
+          if (!(Test-Path -LiteralPath $dylib -PathType Leaf)) { throw "macOS binary did not sync to the extension folder: $dylib" }
+          $lipo = (& lipo -info $dylib 2>&1 | Out-String).Trim()
+          if ($lipo -notmatch 'arm64' -or $lipo -notmatch 'x86_64') { throw "Expected a universal arm64+x86_64 binary: $lipo" }
+
+      # Node.js is preinstalled on the runner image; gm-cli needs no secrets
+      # and auto-provisions a guest license plus the macOS runtime on first use.
+      - name: Install gm-cli 2.3.0
+        shell: pwsh
+        run: |
+          npm i -g "@gamemaker/gm-cli@2.3.0"
+          $gmVersion = (& gm-cli --version 2>&1 | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $gmVersion -notmatch '^2\.3\.0\b') { throw "Unexpected gm-cli: $gmVersion" }
+
+      # The first VM run downloads the GameMaker runtime into this cache.
+      # Bump the trailing component when gm-cli's default runtime changes.
+      - name: Cache GameMaker runtime
+        uses: actions/cache@v4
+        with:
+          path: project/.gmcache
+          key: gmcache-${{ runner.os }}-gmcli-2.3.0-r1
+          restore-keys: |
+            gmcache-${{ runner.os }}-gmcli-2.3.0-
+            gmcache-${{ runner.os }}-
+
+      # Absolute paths only: relative paths make the runner fail to find the
+      # game file. Gating mirrors the Windows job / release.ps1 exactly.
+      # --target=macos is the assumed gm-cli target name; correct it if the
+      # first run reports it as unknown.
+      - name: Run GameMaker VM test suite
+        shell: pwsh
+        run: |
+          $log = "$PWD/out/build/macos-release/gamemaker-tests.log"
+          & gm-cli run "$PWD/project/ICompression.yyp" --target=macos --runtime=vm "--cache-dir=$PWD/project/.gmcache" 2>&1 | Tee-Object -FilePath $log
+          if ($LASTEXITCODE -ne 0) { throw "GameMaker VM tests failed (exit $LASTEXITCODE); see $log" }
+          $output = Get-Content -Raw -LiteralPath $log
+          $summaries = [regex]::Matches($output, 'Tests:\s*(\d+) total,\s*(\d+) passed,\s*(\d+) failed')
+          if (!$summaries.Count) { throw "GameMaker test summary is missing; see $log" }
+          foreach ($summary in $summaries) {
+            if ([int]$summary.Groups[1].Value -le 0 -or $summary.Groups[1].Value -ne $summary.Groups[2].Value -or
+                [int]$summary.Groups[3].Value -ne 0) { throw "GameMaker test summary reports failures; see $log" }
+          }
+
+      - name: Upload test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gamemaker-tests-macos
+          path: out/build/macos-release/gamemaker-tests.log
+          if-no-files-found: ignore

@@ -23,6 +23,10 @@ set(XZ_VERSION "5.8.3")
 set(LIBARCHIVE_VERSION "3.8.8")
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+# Static backends must be position-independent to link into the shared
+# library on Apple/Linux, even when configured without a preset. Inert on
+# Windows.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_POLICY_VERSION_MINIMUM "3.5" CACHE STRING "" FORCE)
 set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(ZLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)

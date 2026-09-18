@@ -18,7 +18,7 @@
 #include <type_traits>
 #include <vector>
 
-#ifdef OS_WINDOWS
+#ifdef _WIN32
 #include <windows.h>
 #endif
 
@@ -40,7 +40,7 @@ static constexpr size_t MAX_OPEN_ARCHIVES = 64;
 // Internal helpers
 // =============================================================================
 
-#ifdef OS_WINDOWS
+#ifdef _WIN32
 // Convert UTF-8 path to wide string for Windows Unicode APIs
 static std::wstring utf8_to_wide(std::string_view utf8)
 {
@@ -82,7 +82,7 @@ static std::string make_temp_path(std::string_view dst)
 
 static void delete_file(std::string_view path)
 {
-#ifdef OS_WINDOWS
+#ifdef _WIN32
     DeleteFileW(utf8_to_wide(path).c_str());
 #else
     std::remove(std::string(path).c_str());
@@ -92,7 +92,7 @@ static void delete_file(std::string_view path)
 // Overwrite an existing destination, matching ofstream truncation semantics.
 static bool replace_file(std::string_view temp, std::string_view dst)
 {
-#ifdef OS_WINDOWS
+#ifdef _WIN32
     return MoveFileExW(utf8_to_wide(temp).c_str(), utf8_to_wide(dst).c_str(),
         MOVEFILE_REPLACE_EXISTING) != 0;
 #else

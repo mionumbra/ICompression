@@ -275,6 +275,12 @@ function Add-FixtureTree {
     # name are checked; it is never executed).
     New-Item -ItemType Directory -Path (Join-Path $fixture 'vs') -Force | Out-Null
     'rem fixture toolchain' | Set-Content -LiteralPath (Join-Path $fixture 'vs\VsDevCmd.bat')
+    # Mach-O stand-ins for the optional macOS binary: a valid fat/universal
+    # magic, a wrong-name twin, and an MZ (non-Mach-O) impostor.
+    New-Item -ItemType Directory -Path (Join-Path $fixture 'macho'), (Join-Path $fixture 'bad') -Force | Out-Null
+    [IO.File]::WriteAllBytes((Join-Path $fixture 'macho\libICompression.dylib'), ([byte[]](0xCA, 0xFE, 0xBA, 0xBE) + [byte[]]::new(60)))
+    [IO.File]::WriteAllBytes((Join-Path $fixture 'macho\foo.dylib'), ([byte[]](0xCA, 0xFE, 0xBA, 0xBE) + [byte[]]::new(60)))
+    [IO.File]::WriteAllBytes((Join-Path $fixture 'bad\libICompression.dylib'), ([byte[]](0x4D, 0x5A, 0x90, 0x00) + [byte[]]::new(60)))
     # Tracked-file view offered to the release filter, including files that
     # must be excluded from the ResourceTool staging copy.
     $global:ICReleaseTestState.mockLsFiles = (@(
@@ -698,6 +704,31 @@ try {
         throw "YYC failure without the AV signature misfired the hint: $failure"
     }
     Add-Pass 'YYC failure without the AV signature skips the hint'
+
+    # Optional macOS binary inclusion: validation, staging, build-info, and
+    # the package validator's conditional requirement.
+    $macOsFixture = Join-Path $fixture 'macho\libICompression.dylib'
+    Assert-Rejected 'MacOsBinary path must exist' @{ OnlyPackage = $true; MacOsBinary = (Join-Path $fixture 'missing\libICompression.dylib') } 'MacOsBinary does not exist'
+    Assert-Rejected 'MacOsBinary must be named for the extension' @{ OnlyPackage = $true; MacOsBinary = (Join-Path $fixture 'macho\foo.dylib') } 'must be named libICompression.dylib'
+    Assert-Rejected 'MacOsBinary must be a Mach-O' @{ OnlyPackage = $true; MacOsBinary = (Join-Path $fixture 'bad\libICompression.dylib') } 'not a Mach-O'
+
+    Set-FixtureCycle 7
+    Reset-SecondHalf
+    Assert-ReleaseSucceeded 'A macOS binary stages alongside the Windows files' @{ OnlyPackage = $true; MacOsBinary = $macOsFixture }
+    $macExpected = @($expectedFiles) + 'project/extensions/ICompression/libICompression.dylib' | Sort-Object
+    $macActual = @(Get-ChildItem -LiteralPath $stageDir -Recurse -File |
+        ForEach-Object { $_.FullName.Substring($stageDir.Length + 1).Replace('\', '/') } | Sort-Object)
+    if (($macActual -join "`n") -cne ($macExpected -join "`n")) {
+        throw "macOS bundle file set mismatch: $(Compare-Object $macExpected $macActual | Out-String)"
+    }
+    $info = Get-Content -Raw -LiteralPath (Join-Path $stageDir 'build-info.json') | ConvertFrom-Json
+    $verified = & (Join-Path $fixtureScripts 'validate-package.ps1') -Archive $archivePath -ExpectedVersion '1.0.3.8' -StageDirectory $stageDir
+    if ($null -eq $info.PSObject.Properties['macos_binary'] -or
+        $info.macos_binary.sha256 -cne (Get-FileHash -LiteralPath $macOsFixture -Algorithm SHA256).Hash -or
+        $verified.Files -ne 23 -or $verified.CheckedFileHashes -ne 22) {
+        throw 'macOS binary was not staged, recorded, and validated'
+    }
+    Add-Pass 'macOS binary stages, records its checksum, and passes the validator'
     Write-Output "Release preflight checks: $($global:ICReleaseTestState.passed) passed"
 }
 finally {
