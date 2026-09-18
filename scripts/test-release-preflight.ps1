@@ -4,6 +4,11 @@
 # packaging, and the source seed advance run end-to-end against fixture trees
 # inside a temporary workspace, never the real repository.
 $ErrorActionPreference = 'Stop'
+trap {
+    Write-Output ("PREFLIGHT TERMINATING ERROR: " + $_.Exception.ToString())
+    Write-Output ("AT: " + $_.InvocationInfo.PositionMessage)
+    exit 1
+}
 Write-Output "pwsh $($PSVersionTable.PSVersion)"
 $repository = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $fixture = Join-Path $repository ('out\release-preflight-tests-' + [guid]::NewGuid().ToString('N'))
@@ -720,4 +725,6 @@ finally {
             }
         Remove-Item -LiteralPath $resolvedFixture -Recurse -Force
     }
+    Write-Output 'fixture cleanup complete'
 }
+exit 0
