@@ -3,6 +3,11 @@
 param([string]$Generator = 'Visual Studio 18 2026', [switch]$KeepFixture)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+trap {
+    Write-Output ("BUILD-COUNTER TERMINATING ERROR: " + $_.Exception.ToString())
+    Write-Output ("AT: " + $_.InvocationInfo.PositionMessage)
+    exit 1
+}
 $repository = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $fixture = Join-Path $repository ('out\build-counter-tests-' + [guid]::NewGuid().ToString('N'))
 $source = Join-Path $fixture 'source'
@@ -159,6 +164,25 @@ ic_enable_build_counter(ICompression
         $full = [IO.Path]::GetFullPath($fixture)
         $allowed = [IO.Path]::GetFullPath((Join-Path $repository 'out')) + [IO.Path]::DirectorySeparatorChar
         if (!$full.StartsWith($allowed, [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe fixture cleanup path' }
-        Remove-Item -LiteralPath $full -Recurse -Force
+        [GC]::Collect()
+        [GC]::WaitForPendingFinalizers()
+        $removed = $false
+        foreach ($attempt in 1..3) {
+            try {
+                Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction Stop
+                $removed = $true
+                break
+            } catch { Start-Sleep -Milliseconds 500 }
+        }
+        if (!$removed) {
+            Get-ChildItem -LiteralPath $full -Recurse -Force -File -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    $locked = $false
+                    try { $stream = [IO.File]::Open($_.FullName, 'Open', 'ReadWrite', 'None'); $stream.Dispose() } catch { $locked = $true }
+                    Write-Output ("leftover{0}: {1}" -f ($(if ($locked) { ' LOCKED' } else { '' }), $_.FullName))
+                }
+            Remove-Item -LiteralPath $full -Recurse -Force
+        }
     } else { Write-Output "Build counter fixture: $fixture" }
 }
+exit 0
