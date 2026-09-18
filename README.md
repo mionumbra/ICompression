@@ -168,6 +168,10 @@ cmake --build --preset win-x64-release
 gm-cli run "project/ICompression.yyp" --target=windows --runtime=vm
 ```
 
+## CI
+
+GitHub Actions (`.github/workflows/ci.yml`) runs two jobs on pushes to `main` and on pull requests. `script-tests` executes the release preflight checks and the real-build counter suite with the Visual Studio 2022 generator. `build-and-vm-tests` then builds extgen `v1.d8c68bd` from its pinned source commit, generates the CMake tree, compiles the Release DLL, and runs the complete GameMaker VM suite with the same summary gating as the release script; the extgen build, CMake dependency downloads, and GameMaker runtime are cached between runs. The release script itself is not used in CI, and YYC testing stays local via `-YycTests` — fresh unsigned YYC binaries can trip heuristic antivirus on hosted runners.
+
 ## Source Ownership
 
 - Edit `api.gmidl`, `src/`, and `third_party/CMakeLists.txt`.

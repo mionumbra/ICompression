@@ -1,0 +1,136 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  script-tests:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Release preflight checks (mocked)
+        shell: pwsh
+        run: scripts/test-release-preflight.ps1
+
+      # The counter suite's generator is a script parameter; hosted runners
+      # have Visual Studio 2022, so select it explicitly (default is VS2026).
+      - name: Build counter checks (real CMake/MSVC builds)
+        shell: pwsh
+        run: scripts/test-build-counter.ps1 -Generator 'Visual Studio 17 2022'
+
+  build-and-vm-tests:
+    needs: script-tests
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # extgen targets net9.0 (README and upstream workflow agree).
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.x'
+
+      - name: Cache extgen build
+        id: extgen-cache
+        uses: actions/cache@v4
+        with:
+          path: out/ci-extgen
+          key: extgen-v1.d8c68bd-${{ runner.os }}
+
+      # Build from source at the pinned commit; upstream publishes rolling
+      # nightly artifacts that cannot be pinned to this commit. The tool bakes
+      # `git rev-parse --short HEAD` into its version, so a clone at d8c68bd
+      # reports exactly `extgen v1.d8c68bd` (mirrors the release.ps1 check).
+      - name: Build extgen from source at the pinned commit
+        if: steps.extgen-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          git clone https://github.com/YoYoGames/GM-ExtensionGenerator out/ci-extgen-src
+          git -C out/ci-extgen-src checkout d8c68bd
+          dotnet publish out/ci-extgen-src/ExtensionGenerator/extgen/extgen.csproj -c Release -o out/ci-extgen
+
+      - name: Verify extgen pin and add to PATH
+        shell: pwsh
+        run: |
+          Add-Content $env:GITHUB_PATH "$PWD\out\ci-extgen"
+          $extgenOutput = (& "$PWD\out\ci-extgen\extgen.exe" --help 2>&1 | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "extgen failed (exit $LASTEXITCODE): $extgenOutput" }
+          if ($extgenOutput -notmatch '\bextgen v1\.(d8c68bd|225bddc)\b') { throw "Expected extgen v1.d8c68bd or v1.225bddc; found: $extgenOutput" }
+
+      - name: Generate CMake build files
+        shell: pwsh
+        run: extgen --config config.json
+
+      # _deps holds the FetchContent downloads of the third-party sources.
+      - name: Cache CMake dependencies
+        uses: actions/cache@v4
+        with:
+          path: out/ci-build/_deps
+          key: cmake-deps-${{ runner.os }}-${{ hashFiles('third_party/CMakeLists.txt') }}
+          restore-keys: cmake-deps-${{ runner.os }}-
+
+      - name: Configure (VS2022, x64, dynamic CRT)
+        shell: pwsh
+        run: cmake -S . -B out/ci-build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL "-DEXT_OUTPUT_DIR=$PWD/project/extensions/ICompression"
+
+      # Fresh state: the build counter bootstraps from the checked-in .yy
+      # fourth field, so the first CI build gets the seed plus one.
+      - name: Build Release DLL
+        shell: pwsh
+        run: cmake --build out/ci-build --config Release
+
+      # Node.js is preinstalled on the runner image; gm-cli needs no secrets
+      # and auto-provisions a guest license plus the runtime on first use.
+      - name: Install gm-cli 2.3.0
+        shell: pwsh
+        run: |
+          npm i -g "@gamemaker/gm-cli@2.3.0"
+          $gmVersion = (& gm-cli --version 2>&1 | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $gmVersion -notmatch '^2\.3\.0\b') { throw "Unexpected gm-cli: $gmVersion" }
+
+      # The first VM run downloads the GameMaker runtime into this cache.
+      # Bump the trailing component when gm-cli's default runtime changes (the
+      # version appears in the test log as runtime-X.Y.Z.W).
+      - name: Cache GameMaker runtime
+        uses: actions/cache@v4
+        with:
+          path: project/.gmcache
+          key: gmcache-${{ runner.os }}-gmcli-2.3.0-r1
+          restore-keys: |
+            gmcache-${{ runner.os }}-gmcli-2.3.0-
+            gmcache-${{ runner.os }}-
+
+      # YYC testing stays local (release.ps1 -YycTests): fresh unsigned YYC
+      # executables trip heuristic antivirus, which hosted runners cannot
+      # allowlist. Absolute paths only: relative paths make the runner fail
+      # to find the game file. Gating mirrors release.ps1 exactly.
+      - name: Run GameMaker VM test suite
+        shell: pwsh
+        run: |
+          $log = "$PWD/out/ci-build/gamemaker-tests.log"
+          & gm-cli run "$PWD/project/ICompression.yyp" --target=windows --runtime=vm "--cache-dir=$PWD/project/.gmcache" 2>&1 | Tee-Object -FilePath $log
+          if ($LASTEXITCODE -ne 0) { throw "GameMaker VM tests failed (exit $LASTEXITCODE); see $log" }
+          $output = Get-Content -Raw -LiteralPath $log
+          $summaries = [regex]::Matches($output, 'Tests:\s*(\d+) total,\s*(\d+) passed,\s*(\d+) failed')
+          if (!$summaries.Count) { throw "GameMaker test summary is missing; see $log" }
+          foreach ($summary in $summaries) {
+            if ([int]$summary.Groups[1].Value -le 0 -or $summary.Groups[1].Value -ne $summary.Groups[2].Value -or
+                [int]$summary.Groups[3].Value -ne 0) { throw "GameMaker test summary reports failures; see $log" }
+          }
+
+      - name: Upload test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gamemaker-tests
+          path: out/ci-build/gamemaker-tests.log
+          if-no-files-found: ignore

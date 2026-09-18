@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.11.1 — Pre-release (2026-09-18)
+
+- Add GitHub Actions CI: one job runs the release preflight (82 checks) and build-counter suite (16 real builds); a second job builds the extension from a pinned extgen source build and runs the full VM test suite with an automatically provisioned guest license.
+- YYC testing stays local (`-YycTests`) because fresh unsigned YYC binaries trip heuristic antivirus on hosted runners.
+- Document the CI setup in README.
+
 ## 1.0.10.1 — Pre-release (2026-09-18)
 
 - Test the suite under GameMaker YYC in addition to the VM (39/39 each); both runners are now covered.
