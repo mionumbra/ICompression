@@ -9,7 +9,8 @@ param(
     [string]$ResourceToolPath,
     [switch]$YycTests,
     [string]$YycVsDevCmd,
-    [string]$MacOsBinary
+    [string]$MacOsBinary,
+    [string]$LinuxBinary
 )
 
 $ErrorActionPreference = "Stop"
@@ -138,6 +139,25 @@ if ($PSBoundParameters.ContainsKey('MacOsBinary')) {
         throw 'MacOsBinary is not a Mach-O or universal binary (bad magic bytes)'
     }
     $macOsHash = (Get-FileHash -LiteralPath $MacOsBinary -Algorithm SHA256).Hash
+}
+$linuxHash = $null
+if ($PSBoundParameters.ContainsKey('LinuxBinary')) {
+    if ([string]::IsNullOrWhiteSpace($LinuxBinary)) { throw 'LinuxBinary must not be empty' }
+    $LinuxBinary = [IO.Path]::GetFullPath($LinuxBinary, $root)
+    if (!(Test-Path -LiteralPath $LinuxBinary -PathType Leaf)) { throw "LinuxBinary does not exist: $LinuxBinary" }
+    if ([IO.Path]::GetFileName($LinuxBinary) -cne 'libICompression.so') {
+        throw "LinuxBinary must be named libICompression.so: $LinuxBinary"
+    }
+    # ELF identification: magic, 64-bit class, little-endian encoding, ET_DYN
+    # type, and the x86-64 machine architecture.
+    $linuxBytes = [IO.File]::ReadAllBytes($LinuxBinary)
+    if ($linuxBytes.Length -lt 20 -or
+        $linuxBytes[0] -ne 0x7F -or $linuxBytes[1] -ne 0x45 -or $linuxBytes[2] -ne 0x4C -or $linuxBytes[3] -ne 0x46 -or
+        $linuxBytes[4] -ne 2 -or $linuxBytes[5] -ne 1 -or
+        [BitConverter]::ToUInt16($linuxBytes, 16) -ne 3 -or [BitConverter]::ToUInt16($linuxBytes, 18) -ne 0x3E) {
+        throw 'LinuxBinary is not an ELF 64-bit x86-64 shared object'
+    }
+    $linuxHash = (Get-FileHash -LiteralPath $LinuxBinary -Algorithm SHA256).Hash
 }
 $cachePath = Join-Path $build 'CMakeCache.txt'
 if (Test-Path -LiteralPath $cachePath -PathType Leaf) {
@@ -318,10 +338,13 @@ foreach ($relative in $files) {
     New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
     Copy-Item -LiteralPath $source -Destination $destination
 }
-# An optional macOS universal binary ships alongside the Windows DLL (the .yy
-# proxy entry selects it per target platform).
+# Optional macOS universal and Linux binaries ship alongside the Windows DLL
+# (the .yy proxy entries select them per target platform).
 if ($MacOsBinary) {
     Copy-Item -LiteralPath $MacOsBinary -Destination (Join-Path $stage 'project\extensions\ICompression\libICompression.dylib')
+}
+if ($LinuxBinary) {
+    Copy-Item -LiteralPath $LinuxBinary -Destination (Join-Path $stage 'project\extensions\ICompression\libICompression.so')
 }
 
 # ResourceTool needs the complete project context. Copy tracked resources from
@@ -343,9 +366,13 @@ try {
         Copy-Item -LiteralPath $resourceSource -Destination $resourceDestination
     }
     # Keep the staged ResourceTool project consistent when the .yy references
-    # the macOS proxy binary; it is untracked, so ls-files never supplies it.
+    # the macOS/Linux proxy binaries; they are untracked, so ls-files never
+    # supplies them.
     if ($MacOsBinary) {
         Copy-Item -LiteralPath $MacOsBinary -Destination (Assert-ChildPath (Join-Path $resourceTemp 'project\extensions\ICompression\libICompression.dylib') $resourceTemp)
+    }
+    if ($LinuxBinary) {
+        Copy-Item -LiteralPath $LinuxBinary -Destination (Assert-ChildPath (Join-Path $resourceTemp 'project\extensions\ICompression\libICompression.so') $resourceTemp)
     }
     $resourceArgs = @((Join-Path $PSScriptRoot 'set-extension-version.cjs'), '--project', (Join-Path $resourceTemp 'project\ICompression.yyp'),
         '--version', $Version, '--cache-dir', $resourceCache)
@@ -417,6 +444,9 @@ if ($yycSummaries) {
 }
 if ($MacOsBinary) {
     $buildInfo.macos_binary = [ordered]@{ sha256 = $macOsHash }
+}
+if ($LinuxBinary) {
+    $buildInfo.linux_binary = [ordered]@{ sha256 = $linuxHash }
 }
 $buildInfo | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $stage 'build-info.json') -Encoding utf8NoBOM
 Get-ChildItem -LiteralPath $stage -Recurse -File | Sort-Object FullName |

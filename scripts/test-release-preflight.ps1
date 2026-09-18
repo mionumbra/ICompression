@@ -291,6 +291,13 @@ function Add-FixtureTree {
     [IO.File]::WriteAllBytes((Join-Path $fixture 'macho\libICompression.dylib'), ([byte[]](0xCA, 0xFE, 0xBA, 0xBE) + [byte[]]::new(60)))
     [IO.File]::WriteAllBytes((Join-Path $fixture 'macho\foo.dylib'), ([byte[]](0xCA, 0xFE, 0xBA, 0xBE) + [byte[]]::new(60)))
     [IO.File]::WriteAllBytes((Join-Path $fixture 'bad\libICompression.dylib'), ([byte[]](0x4D, 0x5A, 0x90, 0x00) + [byte[]]::new(60)))
+    # ELF stand-ins for the optional Linux binary: a valid x86-64 shared-object
+    # header, a wrong-name twin, and an MZ (non-ELF) impostor.
+    New-Item -ItemType Directory -Path (Join-Path $fixture 'elf'), (Join-Path $fixture 'badelf') -Force | Out-Null
+    $elfHeader = [byte[]](0x7F, 0x45, 0x4C, 0x46, 0x02, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x3E, 0x00)
+    [IO.File]::WriteAllBytes((Join-Path $fixture 'elf\libICompression.so'), ($elfHeader + [byte[]]::new(44)))
+    [IO.File]::WriteAllBytes((Join-Path $fixture 'elf\foo.so'), ($elfHeader + [byte[]]::new(44)))
+    [IO.File]::WriteAllBytes((Join-Path $fixture 'badelf\libICompression.so'), ([byte[]](0x4D, 0x5A, 0x90, 0x00) + [byte[]]::new(60)))
     # Tracked-file view offered to the release filter, including files that
     # must be excluded from the ResourceTool staging copy.
     $global:ICReleaseTestState.mockLsFiles = (@(
@@ -753,6 +760,50 @@ try {
         throw 'macOS binary was not staged, recorded, and validated'
     }
     Add-Pass 'macOS binary stages, records its checksum, and passes the validator'
+
+    # Optional Linux binary inclusion, mirroring the macOS parameter.
+    $linuxFixture = Join-Path $fixture 'elf\libICompression.so'
+    Assert-Rejected 'LinuxBinary path must exist' @{ OnlyPackage = $true; LinuxBinary = (Join-Path $fixture 'missing\libICompression.so') } 'LinuxBinary does not exist'
+    Assert-Rejected 'LinuxBinary must be named for the extension' @{ OnlyPackage = $true; LinuxBinary = (Join-Path $fixture 'elf\foo.so') } 'must be named libICompression.so'
+    Assert-Rejected 'LinuxBinary must be an ELF shared object' @{ OnlyPackage = $true; LinuxBinary = (Join-Path $fixture 'badelf\libICompression.so') } 'not an ELF 64-bit x86-64 shared object'
+
+    Set-FixtureCycle 7
+    Reset-SecondHalf
+    Assert-ReleaseSucceeded 'A Linux binary stages alongside the Windows files' @{ OnlyPackage = $true; LinuxBinary = $linuxFixture }
+    $linuxExpected = @($expectedFiles) + 'project/extensions/ICompression/libICompression.so' | Sort-Object
+    $linuxActual = @(Get-ChildItem -LiteralPath $stageDir -Recurse -File |
+        ForEach-Object { $_.FullName.Substring($stageDir.Length + 1).Replace('\', '/') } | Sort-Object)
+    if (($linuxActual -join "`n") -cne ($linuxExpected -join "`n")) {
+        throw "Linux bundle file set mismatch: $(Compare-Object $linuxExpected $linuxActual | Out-String)"
+    }
+    $info = Get-Content -Raw -LiteralPath (Join-Path $stageDir 'build-info.json') | ConvertFrom-Json
+    $verified = & (Join-Path $fixtureScripts 'validate-package.ps1') -Archive $archivePath -ExpectedVersion '1.0.3.8' -StageDirectory $stageDir
+    if ($null -eq $info.PSObject.Properties['linux_binary'] -or
+        $info.linux_binary.sha256 -cne (Get-FileHash -LiteralPath $linuxFixture -Algorithm SHA256).Hash -or
+        $null -ne $info.PSObject.Properties['macos_binary'] -or
+        $verified.Files -ne 31 -or $verified.CheckedFileHashes -ne 30) {
+        throw 'Linux binary was not staged, recorded, and validated'
+    }
+    Add-Pass 'Linux binary stages, records its checksum, and passes the validator'
+
+    Set-FixtureCycle 7
+    Reset-SecondHalf
+    Assert-ReleaseSucceeded 'Linux and macOS binaries stage together' @{ OnlyPackage = $true; MacOsBinary = $macOsFixture; LinuxBinary = $linuxFixture }
+    $bothExpected = @($linuxExpected) + 'project/extensions/ICompression/libICompression.dylib' | Sort-Object
+    $bothActual = @(Get-ChildItem -LiteralPath $stageDir -Recurse -File |
+        ForEach-Object { $_.FullName.Substring($stageDir.Length + 1).Replace('\', '/') } | Sort-Object)
+    if (($bothActual -join "`n") -cne ($bothExpected -join "`n")) {
+        throw "Combined bundle file set mismatch: $(Compare-Object $bothExpected $bothActual | Out-String)"
+    }
+    $info = Get-Content -Raw -LiteralPath (Join-Path $stageDir 'build-info.json') | ConvertFrom-Json
+    $verified = & (Join-Path $fixtureScripts 'validate-package.ps1') -Archive $archivePath -ExpectedVersion '1.0.3.8' -StageDirectory $stageDir
+    if ($null -eq $info.PSObject.Properties['linux_binary'] -or $null -eq $info.PSObject.Properties['macos_binary'] -or
+        $info.linux_binary.sha256 -cne (Get-FileHash -LiteralPath $linuxFixture -Algorithm SHA256).Hash -or
+        $info.macos_binary.sha256 -cne (Get-FileHash -LiteralPath $macOsFixture -Algorithm SHA256).Hash -or
+        $verified.Files -ne 32 -or $verified.CheckedFileHashes -ne 31) {
+        throw 'Linux and macOS binaries were not staged, recorded, and validated'
+    }
+    Add-Pass 'Linux and macOS binaries stage together and both pass the validator'
     Write-Output "Release preflight checks: $($global:ICReleaseTestState.passed) passed"
 }
 finally {

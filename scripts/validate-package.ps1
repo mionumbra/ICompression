@@ -86,6 +86,15 @@ try {
             throw 'macOS binary checksum does not match build-info'
         }
     }
+    if ($null -ne $buildInfo.PSObject.Properties['linux_binary']) {
+        if (!$files.ContainsKey('project/extensions/ICompression/libICompression.so')) {
+            throw 'Linux binary is recorded in build-info but missing from the package'
+        }
+        if ($buildInfo.linux_binary.sha256 -and
+            (Get-ZipHash 'project/extensions/ICompression/libICompression.so') -cne $buildInfo.linux_binary.sha256) {
+            throw 'Linux binary checksum does not match build-info'
+        }
+    }
     if (@($files.Keys | Where-Object { $_ -match '(^|/)(\.git|\.gmcache|\.mcp\.json|AGENTS\.md|CLAUDE\.md|gm-options\.json)(/|$)|licence\.plist' }).Count) {
         throw 'Cache, local settings, or a private license was packaged'
     }

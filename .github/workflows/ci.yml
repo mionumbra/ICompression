@@ -245,3 +245,96 @@ jobs:
           New-Item -ItemType Directory -Path out/smoke-work -Force | Out-Null
           & out/native-smoke "$PWD/project/extensions/ICompression/libICompression.dylib" "$PWD/out/smoke-work"
           if ($LASTEXITCODE -ne 0) { throw "macOS native smoke test failed (exit $LASTEXITCODE)" }
+
+  build-and-test-linux:
+    needs: script-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache extgen
+        id: extgen-cache
+        uses: actions/cache@v4
+        with:
+          path: out/ci-extgen
+          key: extgen-v1.1.0-${{ runner.os }}
+
+      # Pinned binary release (same tag as the other jobs): tag v1.1.0
+      # targets commit d8c68bd, so the tool reports exactly `extgen v1.d8c68bd`.
+      - name: Download extgen v1.1.0 release
+        if: steps.extgen-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path out -Force | Out-Null
+          $zip = 'out/extgen.zip'
+          Invoke-WebRequest -Uri 'https://github.com/YoYoGames/GM-ExtensionGenerator/releases/download/v1.1.0/ExtensionGenerator-linux-x64.zip' -OutFile $zip
+          Expand-Archive -LiteralPath $zip -DestinationPath 'out/ci-extgen'
+          Remove-Item $zip
+          # ZIPs do not preserve executable bits.
+          chmod +x out/ci-extgen/extgen
+
+      - name: Verify extgen pin and add to PATH
+        shell: pwsh
+        run: |
+          Add-Content $env:GITHUB_PATH "$PWD/out/ci-extgen"
+          $extgenOutput = (& "$PWD/out/ci-extgen/extgen" --help 2>&1 | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "extgen failed (exit $LASTEXITCODE): $extgenOutput" }
+          if ($extgenOutput -notmatch '\bextgen v1\.(d8c68bd|225bddc)\b') { throw "Expected extgen v1.d8c68bd or v1.225bddc; found: $extgenOutput" }
+
+      - name: Generate CMake build files
+        shell: pwsh
+        run: extgen --config config.json
+
+      # _deps holds the FetchContent downloads of the third-party sources;
+      # the linux presets build under out/build/<preset>.
+      - name: Cache CMake dependencies
+        uses: actions/cache@v4
+        with:
+          path: out/build/linux-clang-x64-release/_deps
+          key: cmake-deps-${{ runner.os }}-${{ hashFiles('third_party/CMakeLists.txt') }}
+          restore-keys: cmake-deps-${{ runner.os }}-
+
+      # The extgen-generated linux presets use Ninja and clang. ubuntu-latest
+      # ships clang, but install either cheaply if missing.
+      - name: Ensure Ninja and clang
+        shell: pwsh
+        run: |
+          if (!(Get-Command ninja -ErrorAction SilentlyContinue)) { sudo apt-get update -qq; sudo apt-get install -y ninja-build }
+          if (!(Get-Command clang -ErrorAction SilentlyContinue)) { sudo apt-get update -qq; sudo apt-get install -y clang }
+
+      - name: Configure (clang, x64)
+        shell: pwsh
+        run: cmake --preset linux-clang-x64-release
+
+      # The build counter is Windows-only by design; no state handling here.
+      - name: Build Release shared object
+        shell: pwsh
+        run: cmake --build --preset linux-clang-x64-release
+
+      - name: Verify ELF shared object
+        shell: pwsh
+        run: |
+          $so = "$PWD/project/extensions/ICompression/libICompression.so"
+          if (!(Test-Path -LiteralPath $so -PathType Leaf)) { throw "Linux binary did not sync to the extension folder: $so" }
+          $fileOutput = (& file $so 2>&1 | Out-String).Trim()
+          if ($fileOutput -notmatch 'ELF 64-bit LSB shared object' -or $fileOutput -notmatch 'x86-64') { throw "Expected an ELF x86-64 shared object: $fileOutput" }
+
+      - name: Upload Linux shared object artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libICompression-so
+          path: project/extensions/ICompression/libICompression.so
+          retention-days: 30
+
+      # The GameMaker runner has the same headless-GUI problem on Linux as on
+      # macOS, so Linux validation is the native wire-protocol smoke test
+      # (scripts/native-smoke.c); dlopen needs -ldl here.
+      - name: Run native smoke test on the shared object
+        shell: pwsh
+        run: |
+          cc scripts/native-smoke.c -O2 -o out/native-smoke -ldl
+          if ($LASTEXITCODE -ne 0) { throw 'native-smoke compilation failed' }
+          New-Item -ItemType Directory -Path out/smoke-work -Force | Out-Null
+          & out/native-smoke "$PWD/project/extensions/ICompression/libICompression.so" "$PWD/out/smoke-work"
+          if ($LASTEXITCODE -ne 0) { throw "Linux native smoke test failed (exit $LASTEXITCODE)" }
