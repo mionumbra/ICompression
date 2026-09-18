@@ -42,6 +42,10 @@ Copyright (c) 2003-2018 the libarchive authors. The libarchive sources are prima
 
 The controlling license texts are distributed in each upstream source tree. When producing a binary release, `scripts/release.ps1` copies the upstream license files into the package's `licenses` directory. This includes XZ's `COPYING.0BSD` in addition to its license overview, and the complete libarchive compress reader/writer source files so their additional UC Regents notices and conditions are retained.
 
+## ExtensionCore 1.5.0
+
+The shared GameMaker wire runtime is imported from the official `gamemaker.extension_core.yymps` package (YoYoGames/GM-ExtensionGenerator) and is licensed under the Apache License, Version 2.0. The controlling license text ships in the bundle's `licenses` directory and is vendored at `third_party/extension-core-LICENSE.txt`.
+
 ## Local dependency modifications
 
 The libarchive revision above receives the patch in

@@ -241,12 +241,22 @@ function Add-FixtureTree {
     'changelog' | Set-Content -LiteralPath (Join-Path $source 'CHANGELOG.md')
     'zlib bzip2 zstd lz4 xz libarchive' | Set-Content -LiteralPath (Join-Path $source 'THIRD_PARTY_NOTICES.md')
     'ext stub' | Set-Content -LiteralPath (Join-Path $extensionDir 'ICompression.ext')
-    New-Item -ItemType Directory -Path (Join-Path $source 'project\scripts\ICompression_API'), (Join-Path $source 'project\scripts\GMExtCore') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $source 'project\scripts\ICompression_API'), (Join-Path $source 'project\scripts\ExtensionCore_api'),
+        (Join-Path $source 'project\scripts\ExtensionCore_exports'), (Join-Path $source 'project\notes\ExtensionCore_readme'),
+        (Join-Path $source 'project\extensions\ExtensionCore\AndroidSource\Java'), (Join-Path $source 'third_party') -Force | Out-Null
     '{"resources":[]}' | Set-Content -LiteralPath $global:ICReleaseTestState.sourceProject
     'api yy' | Set-Content -LiteralPath (Join-Path $source 'project\scripts\ICompression_API\ICompression_API.yy')
     'api gml' | Set-Content -LiteralPath (Join-Path $source 'project\scripts\ICompression_API\ICompression_API.gml')
-    'core yy' | Set-Content -LiteralPath (Join-Path $source 'project\scripts\GMExtCore\GMExtCore.yy')
-    'core gml' | Set-Content -LiteralPath (Join-Path $source 'project\scripts\GMExtCore\GMExtCore.gml')
+    'core ext yy' | Set-Content -LiteralPath (Join-Path $source 'project\extensions\ExtensionCore\ExtensionCore.yy')
+    'core utils java' | Set-Content -LiteralPath (Join-Path $source 'project\extensions\ExtensionCore\AndroidSource\Java\GMExtUtils.java')
+    'core wire java' | Set-Content -LiteralPath (Join-Path $source 'project\extensions\ExtensionCore\AndroidSource\Java\GMExtWire.java')
+    'core api yy' | Set-Content -LiteralPath (Join-Path $source 'project\scripts\ExtensionCore_api\ExtensionCore_api.yy')
+    'core api gml' | Set-Content -LiteralPath (Join-Path $source 'project\scripts\ExtensionCore_api\ExtensionCore_api.gml')
+    'core exports yy' | Set-Content -LiteralPath (Join-Path $source 'project\scripts\ExtensionCore_exports\ExtensionCore_exports.yy')
+    'core exports gml' | Set-Content -LiteralPath (Join-Path $source 'project\scripts\ExtensionCore_exports\ExtensionCore_exports.gml')
+    'core readme yy' | Set-Content -LiteralPath (Join-Path $source 'project\notes\ExtensionCore_readme\ExtensionCore_readme.yy')
+    'core readme md' | Set-Content -LiteralPath (Join-Path $source 'project\notes\ExtensionCore_readme\ExtensionCore_readme.md')
+    'apache-2.0' | Set-Content -LiteralPath (Join-Path $source 'third_party\extension-core-LICENSE.txt')
     New-Item -ItemType Directory -Path (Join-Path $source 'project\.gmcache\license') -Force | Out-Null
     'secret-license' | Set-Content -LiteralPath (Join-Path $source 'project\.gmcache\license\gm.key')
     '{"mcpServers":{}}' | Set-Content -LiteralPath (Join-Path $source 'project\.mcp.json')
@@ -288,10 +298,17 @@ function Add-FixtureTree {
         'project/extensions/ICompression/ICompression.yy'
         'project/extensions/ICompression/ICompression.ext'
         'project/extensions/ICompression/ICompression.dll'
+        'project/extensions/ExtensionCore/ExtensionCore.yy'
+        'project/extensions/ExtensionCore/AndroidSource/Java/GMExtUtils.java'
+        'project/extensions/ExtensionCore/AndroidSource/Java/GMExtWire.java'
         'project/scripts/ICompression_API/ICompression_API.yy'
         'project/scripts/ICompression_API/ICompression_API.gml'
-        'project/scripts/GMExtCore/GMExtCore.yy'
-        'project/scripts/GMExtCore/GMExtCore.gml'
+        'project/scripts/ExtensionCore_api/ExtensionCore_api.yy'
+        'project/scripts/ExtensionCore_api/ExtensionCore_api.gml'
+        'project/scripts/ExtensionCore_exports/ExtensionCore_exports.yy'
+        'project/scripts/ExtensionCore_exports/ExtensionCore_exports.gml'
+        'project/notes/ExtensionCore_readme/ExtensionCore_readme.yy'
+        'project/notes/ExtensionCore_readme/ExtensionCore_readme.md'
         'project/.gmcache/license/gm.key'
         'project/.mcp.json'
         'project/AGENTS.md'
@@ -473,12 +490,19 @@ try {
     Assert-ReleaseSucceeded 'A passing summary stages and packages the bundle' @{ OnlyPackage = $true }
     $expectedFiles = @(
         'CHANGELOG.md', 'LICENSE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'build-info.json', 'SHA256SUMS.txt',
-        'licenses/bzip2-LICENSE.txt', 'licenses/libarchive-COPYING.txt', 'licenses/libarchive-compress-reader.c.txt',
-        'licenses/libarchive-compress-writer.c.txt', 'licenses/lz4-LICENSE.txt', 'licenses/xz-COPYING.0BSD.txt',
-        'licenses/xz-COPYING.txt', 'licenses/zlib-LICENSE.txt', 'licenses/zstd-LICENSE.txt',
+        'licenses/bzip2-LICENSE.txt', 'licenses/extension-core-LICENSE.txt', 'licenses/libarchive-COPYING.txt',
+        'licenses/libarchive-compress-reader.c.txt', 'licenses/libarchive-compress-writer.c.txt',
+        'licenses/lz4-LICENSE.txt', 'licenses/xz-COPYING.0BSD.txt', 'licenses/xz-COPYING.txt',
+        'licenses/zlib-LICENSE.txt', 'licenses/zstd-LICENSE.txt',
+        'project/extensions/ExtensionCore/ExtensionCore.yy',
+        'project/extensions/ExtensionCore/AndroidSource/Java/GMExtUtils.java',
+        'project/extensions/ExtensionCore/AndroidSource/Java/GMExtWire.java',
         'project/extensions/ICompression/ICompression.dll', 'project/extensions/ICompression/ICompression.ext',
         'project/extensions/ICompression/ICompression.yy',
-        'project/scripts/GMExtCore/GMExtCore.gml', 'project/scripts/GMExtCore/GMExtCore.yy',
+        'project/notes/ExtensionCore_readme/ExtensionCore_readme.md',
+        'project/notes/ExtensionCore_readme/ExtensionCore_readme.yy',
+        'project/scripts/ExtensionCore_api/ExtensionCore_api.gml', 'project/scripts/ExtensionCore_api/ExtensionCore_api.yy',
+        'project/scripts/ExtensionCore_exports/ExtensionCore_exports.gml', 'project/scripts/ExtensionCore_exports/ExtensionCore_exports.yy',
         'project/scripts/ICompression_API/ICompression_API.gml', 'project/scripts/ICompression_API/ICompression_API.yy'
     ) | Sort-Object
     $actualFiles = @(Get-ChildItem -LiteralPath $stageDir -Recurse -File |
@@ -561,7 +585,7 @@ try {
     }
     Add-Pass 'Release resets the cycle counter only after the archive and sidecar exist'
     $verified = & (Join-Path $fixtureScripts 'validate-package.ps1') -Archive $archivePath -ExpectedVersion '1.0.3.8' -StageDirectory $stageDir
-    if ($verified.Version -cne '1.0.3.8' -or $verified.Files -ne 22 -or $verified.CheckedFileHashes -ne 21 -or $verified.Tests -cne '12/12') {
+    if ($verified.Version -cne '1.0.3.8' -or $verified.Files -ne 30 -or $verified.CheckedFileHashes -ne 29 -or $verified.Tests -cne '12/12') {
         throw 'Package validator reported unexpected results'
     }
     Add-Pass 'Package validator accepts the freshly built archive'
@@ -725,7 +749,7 @@ try {
     $verified = & (Join-Path $fixtureScripts 'validate-package.ps1') -Archive $archivePath -ExpectedVersion '1.0.3.8' -StageDirectory $stageDir
     if ($null -eq $info.PSObject.Properties['macos_binary'] -or
         $info.macos_binary.sha256 -cne (Get-FileHash -LiteralPath $macOsFixture -Algorithm SHA256).Hash -or
-        $verified.Files -ne 23 -or $verified.CheckedFileHashes -ne 22) {
+        $verified.Files -ne 31 -or $verified.CheckedFileHashes -ne 30) {
         throw 'macOS binary was not staged, recorded, and validated'
     }
     Add-Pass 'macOS binary stages, records its checksum, and passes the validator'

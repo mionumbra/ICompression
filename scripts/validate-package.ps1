@@ -53,9 +53,14 @@ try {
     if ($files.Count -ne $listed.Count + 1) { throw 'ZIP contains files outside its checksum manifest' }
     foreach ($path in @('README.md', 'LICENSE', 'CHANGELOG.md', 'THIRD_PARTY_NOTICES.md',
         'project/extensions/ICompression/ICompression.yy', 'project/extensions/ICompression/ICompression.ext',
-        'project/extensions/ICompression/ICompression.dll', 'project/scripts/ICompression_API/ICompression_API.yy',
-        'project/scripts/ICompression_API/ICompression_API.gml', 'project/scripts/GMExtCore/GMExtCore.yy',
-        'project/scripts/GMExtCore/GMExtCore.gml', 'licenses/xz-COPYING.0BSD.txt',
+        'project/extensions/ICompression/ICompression.dll', 'project/extensions/ExtensionCore/ExtensionCore.yy',
+        'project/extensions/ExtensionCore/AndroidSource/Java/GMExtUtils.java',
+        'project/extensions/ExtensionCore/AndroidSource/Java/GMExtWire.java',
+        'project/scripts/ICompression_API/ICompression_API.yy', 'project/scripts/ICompression_API/ICompression_API.gml',
+        'project/scripts/ExtensionCore_api/ExtensionCore_api.yy', 'project/scripts/ExtensionCore_api/ExtensionCore_api.gml',
+        'project/scripts/ExtensionCore_exports/ExtensionCore_exports.yy', 'project/scripts/ExtensionCore_exports/ExtensionCore_exports.gml',
+        'project/notes/ExtensionCore_readme/ExtensionCore_readme.yy', 'project/notes/ExtensionCore_readme/ExtensionCore_readme.md',
+        'licenses/xz-COPYING.0BSD.txt', 'licenses/extension-core-LICENSE.txt',
         'licenses/libarchive-compress-reader.c.txt', 'licenses/libarchive-compress-writer.c.txt', 'build-info.json')) {
         if (!$files.ContainsKey($path)) { throw "Required release resource missing: $path" }
     }

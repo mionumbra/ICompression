@@ -299,10 +299,17 @@ $files = @(
     'project\extensions\ICompression\ICompression.yy',
     'project\extensions\ICompression\ICompression.ext',
     'project\extensions\ICompression\ICompression.dll',
+    'project\extensions\ExtensionCore\ExtensionCore.yy',
+    'project\extensions\ExtensionCore\AndroidSource\Java\GMExtUtils.java',
+    'project\extensions\ExtensionCore\AndroidSource\Java\GMExtWire.java',
     'project\scripts\ICompression_API\ICompression_API.yy',
     'project\scripts\ICompression_API\ICompression_API.gml',
-    'project\scripts\GMExtCore\GMExtCore.yy',
-    'project\scripts\GMExtCore\GMExtCore.gml'
+    'project\scripts\ExtensionCore_api\ExtensionCore_api.yy',
+    'project\scripts\ExtensionCore_api\ExtensionCore_api.gml',
+    'project\scripts\ExtensionCore_exports\ExtensionCore_exports.yy',
+    'project\scripts\ExtensionCore_exports\ExtensionCore_exports.gml',
+    'project\notes\ExtensionCore_readme\ExtensionCore_readme.yy',
+    'project\notes\ExtensionCore_readme\ExtensionCore_readme.md'
 )
 foreach ($relative in $files) {
     $source = Join-Path $root $relative
@@ -369,11 +376,15 @@ $licenses = [ordered]@{
     'libarchive-COPYING.txt' = 'libarchive-src\COPYING'
     'libarchive-compress-reader.c.txt' = 'libarchive-src\libarchive\archive_read_support_filter_compress.c'
     'libarchive-compress-writer.c.txt' = 'libarchive-src\libarchive\archive_write_add_filter_compress.c'
+    # Vendored in the source tree (not a _deps download); rooted values are
+    # used as-is by the copy loop below.
+    'extension-core-LICENSE.txt' = (Join-Path $root 'third_party\extension-core-LICENSE.txt')
 }
 $licenseDir = Join-Path $stage 'licenses'
 New-Item -ItemType Directory -Path $licenseDir -Force | Out-Null
 foreach ($item in $licenses.GetEnumerator()) {
-    $source = Join-Path (Join-Path $build '_deps') $item.Value
+    $source = $item.Value
+    if (![IO.Path]::IsPathRooted($source)) { $source = Join-Path (Join-Path $build '_deps') $source }
     if (!(Test-Path -LiteralPath $source -PathType Leaf)) { throw "Missing dependency license: $source" }
     Copy-Item -LiteralPath $source -Destination (Join-Path $licenseDir $item.Key)
 }

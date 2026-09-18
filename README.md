@@ -5,6 +5,7 @@ ICompression is a native compression, decompression, and archive extension for G
 ## Support
 
 - Platform: Windows x64
+- Platform: macOS arm64 (universal binary with x86_64); the `libICompression.dylib` ships in the same release bundle
 - GameMaker: tested with IDE 2026.0.0.16 and Runtime 2026.0.0.23
 - Runner: Windows VM and YYC tested. The release pipeline's YYC test pass is opt-in (`-YycTests` with `-YycVsDevCmd`) because it needs a configured GameMaker C++ toolchain. `-YycVsDevCmd` must name the `VsDevCmd.bat` file itself (e.g. `<VS>/Common7/Tools/VsDevCmd.bat`), not the Visual Studio root — otherwise the runtime reports that no Visual Studio location is set. Fresh unsigned YYC binaries can be quarantined by heuristic antivirus; allowlist the build output if the runner dies with an access-denied error starting the game.
 - Functional version: 1.0.4; CMake assigns the fourth field on each successful DLL build (see Building below).
@@ -13,15 +14,17 @@ Supported stream filters are gzip, bzip2, zstd, LZ4, and xz. ZIP, 7z, and tar ar
 
 ## Installation
 
-The generated ZIP is a versioned resource bundle, not a `.yymps` file. To install it, copy the extension and script resource directories into a GameMaker project and add the three resources to that project's `.yyp`, or use GameMaker's Local Package workflow to create/import a `.yymps` from the staged resources. A complete release contains:
+The generated ZIP is a versioned resource bundle, not a `.yymps` file. To install it, copy the extension and script resource directories into a GameMaker project and add the bundled resources to that project's `.yyp`, or use GameMaker's Local Package workflow to create/import a `.yymps` from the staged resources. A complete release contains:
 
 - `ICompression.dll`
 - `ICompression.ext`
 - the `ICompression` extension resource
 - the `ICompression_API` generated script
-- the `GMExtCore` generated runtime script
+- the `ExtensionCore` extension resource (including its `AndroidSource` files)
+- the `ExtensionCore_api` and `ExtensionCore_exports` script resources
+- the `ExtensionCore_readme` note
 
-Do not copy only the DLL. The generated scripts provide the public typed GML API and native wire runtime.
+Do not copy only the DLL. The generated script provides the public typed GML API, and the ExtensionCore pieces provide the native wire runtime. The runtime comes from the official `gamemaker.extension_core` package (YoYoGames/GM-ExtensionGenerator, Apache 2.0), imported as `gamemaker.extension_core.yymps`.
 
 ## Examples
 
