@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.10.1 — Pre-release (2026-09-18)
+
+- Test the suite under GameMaker YYC in addition to the VM (39/39 each); both runners are now covered.
+- Add opt-in `-YycTests`/`-YycVsDevCmd` to the release script: runs the suite a second time under YYC with the same gating, records `yyc_tests` in build-info, validates that the VsDevCmd.bat file (not the VS root) is given, and hints at antivirus quarantine when a fresh YYC exe is blocked from starting.
+- Extend release preflight to 82 checks.
+
 ## 1.0.9.1 — Pre-release (2026-09-18)
 
 - Document that archive reading accepts every libarchive format (cpio, ISO 9660, CAB, LHA, XAR, mtree, WARC, and more), while creation stays ZIP/7z/tar and detection reports other formats as `Raw`.

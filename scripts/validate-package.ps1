@@ -66,6 +66,10 @@ try {
     if ($buildInfo.tests.failed -ne 0 -or $buildInfo.tests.total -le 0 -or $buildInfo.tests.passed -ne $buildInfo.tests.total) {
         throw 'Release metadata does not record a fully passing test run'
     }
+    if ($null -ne $buildInfo.PSObject.Properties['yyc_tests'] -and
+        ($buildInfo.yyc_tests.failed -ne 0 -or $buildInfo.yyc_tests.total -le 0 -or $buildInfo.yyc_tests.passed -ne $buildInfo.yyc_tests.total)) {
+        throw 'Release metadata does not record a fully passing YYC test run'
+    }
     if (@($files.Keys | Where-Object { $_ -match '(^|/)(\.git|\.gmcache|\.mcp\.json|AGENTS\.md|CLAUDE\.md|gm-options\.json)(/|$)|licence\.plist' }).Count) {
         throw 'Cache, local settings, or a private license was packaged'
     }

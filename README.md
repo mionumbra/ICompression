@@ -6,7 +6,7 @@ ICompression is a native compression, decompression, and archive extension for G
 
 - Platform: Windows x64
 - GameMaker: tested with IDE 2026.0.0.16 and Runtime 2026.0.0.23
-- Runner: Windows VM tested; YYC requires a configured GameMaker C++ toolchain
+- Runner: Windows VM and YYC tested. The release pipeline's YYC test pass is opt-in (`-YycTests` with `-YycVsDevCmd`) because it needs a configured GameMaker C++ toolchain. `-YycVsDevCmd` must name the `VsDevCmd.bat` file itself (e.g. `<VS>/Common7/Tools/VsDevCmd.bat`), not the Visual Studio root — otherwise the runtime reports that no Visual Studio location is set. Fresh unsigned YYC binaries can be quarantined by heuristic antivirus; allowlist the build output if the runner dies with an access-denied error starting the game.
 - Functional version: 1.0.4; CMake assigns the fourth field on each successful DLL build (see Building below).
 
 Supported stream filters are gzip, bzip2, zstd, LZ4, and xz. ZIP, 7z, and tar archives can be created and read. RAR is detection/read-only through libarchive; RAR creation is not supported. Archive reading (list, extract, and single-entry APIs) accepts every format libarchive reads — beyond ZIP, 7z, tar, and RAR this includes cpio, ISO 9660, CAB, LHA, XAR, mtree, and WARC (libarchive 3.8.8). Creation is ZIP/7z/tar only, and all extraction safety checks apply regardless of format. `ic_detect` identifies the primary formats; other readable formats report `Raw`.
@@ -128,7 +128,7 @@ Counter state lives in `.build-state/counter.json`, outside `out/`, and survives
 
 The source extension `.yy` supplies the first three fields and the bootstrap count. Compilations do not rewrite it, but a successful release advances its fourth field to the shipped version through the same GameMaker resource-tool path as the staged metadata (never rewinding a newer seed), so a fresh clone's build counter always seeds above every released build number. The compiled DLL and its `.dll.build.json` receipt record the actual full version and SHA-256. Packaging checks the receipt and uses GameMaker's resource tool to set the staged extension metadata to that version. DLL, packaged extension, package filename and build information therefore agree. The optional `-Version` argument must match the compiled DLL's complete version.
 
-The release script uses incremental builds, verifies the DLL version and x64 architecture, and runs the complete VM test suite. Both the process exit status and a successful, nonempty test summary are required. GameMaker uses the runtime selected by the user's gm-cli configuration; the script does not pin a runtime version.
+The release script uses incremental builds, verifies the DLL version and x64 architecture, and runs the complete VM test suite. Both the process exit status and a successful, nonempty test summary are required. GameMaker uses the runtime selected by the user's gm-cli configuration; the script does not pin a runtime version. `-YycTests -YycVsDevCmd <path>` optionally repeats the suite under YYC (`--runtime=native`) with the same gating and records it in `build-info.json`; the archive is not produced when either suite fails.
 
 To reuse an existing CMake tree and its downloaded dependencies:
 

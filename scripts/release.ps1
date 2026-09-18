@@ -6,7 +6,9 @@ param(
     [string]$BuildDirectory,
     [string]$GameMakerCacheDirectory,
     [switch]$OnlyPackage,
-    [string]$ResourceToolPath
+    [string]$ResourceToolPath,
+    [switch]$YycTests,
+    [string]$YycVsDevCmd
 )
 
 $ErrorActionPreference = "Stop"
@@ -110,6 +112,16 @@ if ($PSBoundParameters.ContainsKey('ResourceToolPath')) {
     $ResourceToolPath = [IO.Path]::GetFullPath($ResourceToolPath, $root)
     if (!(Test-Path -LiteralPath $ResourceToolPath -PathType Leaf)) { throw "ResourceToolPath does not exist: $ResourceToolPath" }
 }
+if ($YycTests) {
+    if ([string]::IsNullOrWhiteSpace($YycVsDevCmd)) { throw 'YycVsDevCmd is required with -YycTests' }
+    $YycVsDevCmd = [IO.Path]::GetFullPath($YycVsDevCmd, $root)
+    # The runtime's toolchain default names the VsDevCmd.bat file itself; a
+    # Visual Studio root makes the asset compiler report no VS location is set.
+    if (!(Test-Path -LiteralPath $YycVsDevCmd -PathType Leaf) -or [IO.Path]::GetFileName($YycVsDevCmd) -ine 'VsDevCmd.bat') {
+        throw "YycVsDevCmd must point at an existing VsDevCmd.bat (not the Visual Studio root): $YycVsDevCmd"
+    }
+}
+elseif ($PSBoundParameters.ContainsKey('YycVsDevCmd')) { throw 'YycVsDevCmd requires -YycTests' }
 $cachePath = Join-Path $build 'CMakeCache.txt'
 if (Test-Path -LiteralPath $cachePath -PathType Leaf) {
     $cache = Get-Content -Raw -LiteralPath $cachePath
@@ -234,6 +246,31 @@ foreach ($summary in $summaries) {
         [int]$summary.Groups[3].Value -ne 0) { throw "GameMaker test summary reports failures; see $testLog" }
 }
 
+# Optional second pass: the same suite under YYC (native), gated identically.
+$yycSummaries = $null
+if ($YycTests) {
+    $yycLog = Join-Path $build 'gamemaker-tests-yyc.log'
+    $yycToolchain = (@{ windows = @{ visualStudioSdk = ($YycVsDevCmd -replace '\\', '/') } } | ConvertTo-Json -Compress)
+    $yycArgs = @('run', $project, '--target=windows', '--runtime=native', "--toolchain-options=$yycToolchain")
+    if ($GameMakerCacheDirectory) { $yycArgs += "--cache-dir=$GameMakerCacheDirectory" }
+    & gm-cli @yycArgs 2>&1 | Tee-Object -FilePath $yycLog
+    $yycExitCode = $LASTEXITCODE
+    $yycOutput = Get-Content -Raw -LiteralPath $yycLog
+    # A fresh unsigned YYC exe can be quarantined by heuristic antivirus; Igor
+    # then dies with a Win32 access-denied error when starting the game.
+    $yycHint = ''
+    if ($yycOutput -match 'Win32Exception|Access is denied|access is denied') {
+        $yycHint = ' A fresh unsigned YYC executable may have been quarantined by heuristic antivirus; allowlist the build output and retry.'
+    }
+    if ($yycExitCode -ne 0) { throw "GameMaker YYC tests failed (exit $yycExitCode); see $yycLog.$yycHint" }
+    $yycSummaries = [regex]::Matches($yycOutput, 'Tests:\s*(\d+) total,\s*(\d+) passed,\s*(\d+) failed')
+    if (!$yycSummaries.Count) { throw "GameMaker YYC test summary is missing; see $yycLog.$yycHint" }
+    foreach ($summary in $yycSummaries) {
+        if ([int]$summary.Groups[1].Value -le 0 -or $summary.Groups[1].Value -ne $summary.Groups[2].Value -or
+            [int]$summary.Groups[3].Value -ne 0) { throw "GameMaker YYC test summary reports failures; see $yycLog.$yycHint" }
+    }
+}
+
 Remove-ReleaseDirectory $stage (Join-Path $root 'release')
 foreach ($oldFile in @($archive, "${archive}.sha256")) {
     $safeFile = Assert-ChildPath $oldFile (Join-Path $root 'release')
@@ -319,7 +356,7 @@ $runtimeVersions = @([regex]::Matches($testOutput, 'runtime-([0-9]+\.[0-9]+\.[0-
 # The shipped build-info must name the runtime that ran the tests; a silently
 # empty list would hide a scrape regression, so fail like the summary gate.
 if (!$runtimeVersions.Count) { throw "GameMaker runtime version is missing from the test log; see $testLog" }
-[ordered]@{
+$buildInfo = [ordered]@{
     extension_version = $Version
     base_version = $receipt.base_version
     build_number = $receipt.build_number
@@ -336,7 +373,11 @@ if (!$runtimeVersions.Count) { throw "GameMaker runtime version is missing from 
     platform = 'windows-x64'
     gamemaker_runtime_versions = $runtimeVersions
     tests = [ordered]@{ total = [int]$summaries[-1].Groups[1].Value; passed = [int]$summaries[-1].Groups[2].Value; failed = 0 }
-} | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $stage 'build-info.json') -Encoding utf8NoBOM
+}
+if ($yycSummaries) {
+    $buildInfo.yyc_tests = [ordered]@{ total = [int]$yycSummaries[-1].Groups[1].Value; passed = [int]$yycSummaries[-1].Groups[2].Value; failed = 0 }
+}
+$buildInfo | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $stage 'build-info.json') -Encoding utf8NoBOM
 Get-ChildItem -LiteralPath $stage -Recurse -File | Sort-Object FullName |
     Get-FileHash -Algorithm SHA256 |
     ForEach-Object { "$($_.Hash)  $($_.Path.Substring($stage.Length + 1).Replace('\', '/'))" } |

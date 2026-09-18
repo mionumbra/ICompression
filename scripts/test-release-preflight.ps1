@@ -41,6 +41,9 @@ $global:ICReleaseTestState.counterPath = $null
 $global:ICReleaseTestState.mockBuildSync = $true
 $global:ICReleaseTestState.gmRunCalls = 0
 $global:ICReleaseTestState.tamperStagedFile = $false
+$global:ICReleaseTestState.gmRunArgs = @()
+$global:ICReleaseTestState.mockYycOutput = $null
+$global:ICReleaseTestState.mockYycExit = 0
 function git {
     $global:LASTEXITCODE = 0
     if ($args -contains '--show-toplevel') { return $global:ICReleaseTestState.mockWorkspace }
@@ -82,9 +85,15 @@ function cmake {
 function gm-cli {
     if ($args -contains 'run') {
         $global:ICReleaseTestState.gmRunCalls++
+        $global:ICReleaseTestState.gmRunArgs += ,@($args)
         if ($null -eq $global:ICReleaseTestState.mockTestOutput) {
             $global:LASTEXITCODE = 0
             throw 'STOP_AFTER_ARTIFACT_VALIDATION'
+        }
+        if ($args -contains '--runtime=native') {
+            $global:LASTEXITCODE = $global:ICReleaseTestState.mockYycExit
+            if ($null -ne $global:ICReleaseTestState.mockYycOutput) { return $global:ICReleaseTestState.mockYycOutput }
+            return $global:ICReleaseTestState.mockTestOutput
         }
         $global:LASTEXITCODE = $global:ICReleaseTestState.mockTestExit
         return $global:ICReleaseTestState.mockTestOutput
@@ -256,6 +265,10 @@ function Add-FixtureTree {
     [IO.File]::WriteAllText($global:ICReleaseTestState.counterPath,
         (@{ schema_version = 1; last_builds = @{ '1.0.3' = 8 }; artifacts = @{}; cycle_builds = 7 } | ConvertTo-Json -Depth 20),
         [Text.UTF8Encoding]::new($false))
+    # Toolchain stand-in for the opt-in YYC pass (only existence and the file
+    # name are checked; it is never executed).
+    New-Item -ItemType Directory -Path (Join-Path $fixture 'vs') -Force | Out-Null
+    'rem fixture toolchain' | Set-Content -LiteralPath (Join-Path $fixture 'vs\VsDevCmd.bat')
     # Tracked-file view offered to the release filter, including files that
     # must be excluded from the ResourceTool staging copy.
     $global:ICReleaseTestState.mockLsFiles = (@(
@@ -414,6 +427,9 @@ try {
         $global:ICReleaseTestState.mockBuildSync = $true
         $global:ICReleaseTestState.gmRunCalls = 0
         $global:ICReleaseTestState.tamperStagedFile = $false
+        $global:ICReleaseTestState.gmRunArgs = @()
+        $global:ICReleaseTestState.mockYycOutput = $null
+        $global:ICReleaseTestState.mockYycExit = 0
     }
     Set-FixtureVersion '1.0.3.1'
     Set-FixtureArtifact '1.0.3.8'
@@ -622,6 +638,60 @@ try {
     $global:ICReleaseTestState.tamperStagedFile = $false
     if (!(Test-Path -LiteralPath $archivePath)) { throw 'Tampered archive was not left in place for diagnosis' }
     Add-Pass 'Post-archive verification fails the release but keeps the archive'
+
+    # Opt-in YYC second pass: parameter validation, native run shape, gating,
+    # and the antivirus hint. The VsDevCmd fixture is never executed.
+    $yycVsDevCmd = Join-Path $fixture 'vs\VsDevCmd.bat'
+    Assert-Rejected 'YYC tests require the toolchain path' @{ OnlyPackage = $true; YycTests = $true } 'YycVsDevCmd is required'
+    Assert-Rejected 'YYC toolchain path must exist' @{ OnlyPackage = $true; YycTests = $true; YycVsDevCmd = (Join-Path $fixture 'missing\VsDevCmd.bat') } 'must point at an existing VsDevCmd.bat'
+    Assert-Rejected 'YYC toolchain path must name VsDevCmd.bat' @{ OnlyPackage = $true; YycTests = $true; YycVsDevCmd = (Join-Path $source 'README.md') } 'must point at an existing VsDevCmd.bat'
+    Assert-Rejected 'YYC toolchain path requires the switch' @{ OnlyPackage = $true; YycVsDevCmd = $yycVsDevCmd } 'requires -YycTests'
+
+    Set-FixtureCycle 7
+    Reset-SecondHalf
+    Assert-ReleaseSucceeded 'YYC tests run natively with the selected toolchain' @{ OnlyPackage = $true; YycTests = $true; YycVsDevCmd = $yycVsDevCmd }
+    $expectedToolchain = '--toolchain-options={"windows":{"visualStudioSdk":"' + ($yycVsDevCmd -replace '\\', '/') + '"}}'
+    if ($global:ICReleaseTestState.gmRunCalls -ne 2 -or
+        @($global:ICReleaseTestState.gmRunArgs[0] | Where-Object { $_ -eq '--runtime=vm' }).Count -ne 1 -or
+        @($global:ICReleaseTestState.gmRunArgs[0] | Where-Object { $_ -like '--toolchain-options*' }).Count -ne 0 -or
+        @($global:ICReleaseTestState.gmRunArgs[1] | Where-Object { $_ -eq '--runtime=native' }).Count -ne 1 -or
+        @($global:ICReleaseTestState.gmRunArgs[1] | Where-Object { $_ -eq $expectedToolchain }).Count -ne 1 -or
+        !(Test-Path -LiteralPath (Join-Path $packageBuild 'gamemaker-tests-yyc.log'))) {
+        throw 'YYC run did not receive the native runtime and the toolchain options'
+    }
+    Add-Pass 'YYC run receives the native runtime and the toolchain options'
+    $info = Get-Content -Raw -LiteralPath (Join-Path $stageDir 'build-info.json') | ConvertFrom-Json
+    $verified = & (Join-Path $fixtureScripts 'validate-package.ps1') -Archive $archivePath -ExpectedVersion '1.0.3.8' -StageDirectory $stageDir
+    if ($info.tests.total -ne 12 -or $info.tests.failed -ne 0 -or $verified.Tests -cne '12/12' -or
+        $null -eq $info.PSObject.Properties['yyc_tests'] -or
+        $info.yyc_tests.total -ne 12 -or $info.yyc_tests.passed -ne 12 -or $info.yyc_tests.failed -ne 0) {
+        throw 'build-info.json or the package validator did not record both test runs'
+    }
+    Add-Pass 'build-info.json records the YYC run and passes the package validator'
+
+    Reset-SecondHalf
+    $archiveBefore = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
+    $global:ICReleaseTestState.mockYycOutput = 'Tests: 5 total, 4 passed, 1 failed'
+    Assert-Rejected 'YYC gate rejects failed tests' @{ OnlyPackage = $true; YycTests = $true; YycVsDevCmd = $yycVsDevCmd } 'YYC test summary reports failures'
+    if ((Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash -cne $archiveBefore -or $global:ICReleaseTestState.gmRunCalls -ne 2) {
+        throw 'YYC failure still touched the archive or skipped a run'
+    }
+    Add-Pass 'YYC gate aborts after both runs and leaves the archive alone'
+    $global:ICReleaseTestState.mockYycOutput = 'compiler noise without a summary'
+    Assert-Rejected 'YYC gate rejects a missing summary' @{ OnlyPackage = $true; YycTests = $true; YycVsDevCmd = $yycVsDevCmd } 'YYC test summary is missing'
+    $global:ICReleaseTestState.mockYycExit = 1
+    $global:ICReleaseTestState.mockYycOutput = "Igor.Windows executed`nSystem.ComponentModel.Win32Exception (5): Access is denied."
+    Assert-Rejected 'YYC failure hints at antivirus quarantine' @{ OnlyPackage = $true; YycTests = $true; YycVsDevCmd = $yycVsDevCmd } 'quarantined by heuristic antivirus'
+    Reset-SecondHalf
+    $global:ICReleaseTestState.mockYycExit = 1
+    $global:ICReleaseTestState.mockYycOutput = 'generic build break'
+    $failure = $null
+    try { & $fixtureRelease -OnlyPackage -YycTests -YycVsDevCmd $yycVsDevCmd | Out-Null }
+    catch { $failure = $_.Exception.Message }
+    if (!$failure -or $failure -notlike '*YYC tests failed (exit 1)*' -or $failure -like '*quarantined*') {
+        throw "YYC failure without the AV signature misfired the hint: $failure"
+    }
+    Add-Pass 'YYC failure without the AV signature skips the hint'
     Write-Output "Release preflight checks: $($global:ICReleaseTestState.passed) passed"
 }
 finally {
