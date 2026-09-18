@@ -34,29 +34,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # extgen targets net9.0 (README and upstream workflow agree).
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '9.x'
-
-      - name: Cache extgen build
+      - name: Cache extgen
         id: extgen-cache
         uses: actions/cache@v4
         with:
           path: out/ci-extgen
-          key: extgen-v1.d8c68bd-${{ runner.os }}
+          key: extgen-v1.1.0-${{ runner.os }}
 
-      # Build from source at the pinned commit; upstream publishes rolling
-      # nightly artifacts that cannot be pinned to this commit. The tool bakes
-      # `git rev-parse --short HEAD` into its version, so a clone at d8c68bd
+      # Pinned binary release: tag v1.1.0 targets commit d8c68bd, so the tool
       # reports exactly `extgen v1.d8c68bd` (mirrors the release.ps1 check).
-      - name: Build extgen from source at the pinned commit
+      - name: Download extgen v1.1.0 release
         if: steps.extgen-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          git clone https://github.com/YoYoGames/GM-ExtensionGenerator out/ci-extgen-src
-          git -C out/ci-extgen-src checkout d8c68bd
-          dotnet publish out/ci-extgen-src/ExtensionGenerator/extgen/extgen.csproj -c Release -o out/ci-extgen
+          $zip = 'out/extgen.zip'
+          Invoke-WebRequest -Uri 'https://github.com/YoYoGames/GM-ExtensionGenerator/releases/download/v1.1.0/ExtensionGenerator-win-x64.zip' -OutFile $zip
+          Expand-Archive -LiteralPath $zip -DestinationPath 'out/ci-extgen'
+          Remove-Item $zip
 
       - name: Verify extgen pin and add to PATH
         shell: pwsh

@@ -4,6 +4,7 @@
 # packaging, and the source seed advance run end-to-end against fixture trees
 # inside a temporary workspace, never the real repository.
 $ErrorActionPreference = 'Stop'
+Write-Output "pwsh $($PSVersionTable.PSVersion)"
 $repository = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $fixture = Join-Path $repository ('out\release-preflight-tests-' + [guid]::NewGuid().ToString('N'))
 $source = Join-Path $fixture 'source'
@@ -698,5 +699,25 @@ finally {
     $resolvedFixture = [IO.Path]::GetFullPath($fixture)
     $allowedParent = [IO.Path]::GetFullPath((Join-Path $repository 'out')) + [IO.Path]::DirectorySeparatorChar
     if (!$resolvedFixture.StartsWith($allowedParent, [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe fixture cleanup path' }
-    Remove-Item -LiteralPath $resolvedFixture -Recurse -Force
+    # Release pending archive handles, then retry removal; a locked leftover
+    # (observed on hosted runners after a green run) gets reported by name.
+    [GC]::Collect()
+    [GC]::WaitForPendingFinalizers()
+    $removed = $false
+    foreach ($attempt in 1..3) {
+        try {
+            Remove-Item -LiteralPath $resolvedFixture -Recurse -Force -ErrorAction Stop
+            $removed = $true
+            break
+        } catch { Start-Sleep -Milliseconds 500 }
+    }
+    if (!$removed) {
+        Get-ChildItem -LiteralPath $resolvedFixture -Recurse -Force -File -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                $locked = $false
+                try { $stream = [IO.File]::Open($_.FullName, 'Open', 'ReadWrite', 'None'); $stream.Dispose() } catch { $locked = $true }
+                Write-Output ("leftover{0}: {1}" -f ($(if ($locked) { ' LOCKED' } else { '' }), $_.FullName))
+            }
+        Remove-Item -LiteralPath $resolvedFixture -Recurse -Force
+    }
 }
