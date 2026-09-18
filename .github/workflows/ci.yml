@@ -219,6 +219,19 @@ jobs:
           $lipo = (& lipo -info $dylib 2>&1 | Out-String).Trim()
           if ($lipo -notmatch 'arm64' -or $lipo -notmatch 'x86_64') { throw "Expected a universal arm64+x86_64 binary: $lipo" }
 
+      # The macOS runner rejects unsigned extension binaries; ad-hoc signing is
+      # enough for CI/dev runs (distribution signing needs an Apple ID).
+      - name: Ad-hoc codesign the dylib
+        shell: pwsh
+        run: codesign --sign - --force "$PWD/project/extensions/ICompression/libICompression.dylib"
+
+      - name: Upload macOS dylib artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libICompression-dylib
+          path: project/extensions/ICompression/libICompression.dylib
+          retention-days: 30
+
       # Node.js is preinstalled on the runner image; gm-cli needs no secrets
       # and auto-provisions a guest license plus the macOS runtime on first use.
       - name: Install gm-cli 2.3.0
