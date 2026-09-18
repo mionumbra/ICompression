@@ -8,7 +8,8 @@
 param(
     [Parameter(Mandatory)][string]$Archive,
     [Parameter(Mandatory)][string]$ExpectedVersion,
-    [string]$StageDirectory
+    [string]$StageDirectory,
+    [string]$Yymps
 )
 $ErrorActionPreference = 'Stop'
 if ($ExpectedVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
@@ -113,3 +114,84 @@ try {
     [pscustomobject]@{ Archive = $Archive; Version = $buildInfo.extension_version; Files = $files.Count
         CheckedFileHashes = $listed.Count; Tests = "$($buildInfo.tests.passed)/$($buildInfo.tests.total)"; SHA256 = $actualArchiveHash }
 } finally { $zip.Dispose() }
+if ($Yymps) {
+    # The Local Package is a self-contained mini project: the four metadata
+    # files plus exactly the staged project resources, every byte MD5-manifested.
+    if (!$StageDirectory) { throw '-Yymps validation requires -StageDirectory to derive the expected resource set' }
+    if (!(Test-Path -LiteralPath $Yymps -PathType Leaf)) { throw "Local package is missing: $Yymps" }
+    $localPackage = [IO.Compression.ZipFile]::OpenRead($Yymps)
+    try {
+        $packageFiles = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+        foreach ($entry in $localPackage.Entries) {
+            if ($entry.Name -eq '') { continue }
+            if (!$packageFiles.TryAdd($entry.FullName, $entry)) { throw "Duplicate package entry: $($entry.FullName)" }
+        }
+        foreach ($required in @('metadata.json', 'yymanifest.xml', 'ICompression.yyp', 'ICompression.resource_order')) {
+            if (!$packageFiles.ContainsKey($required)) { throw "Local package is missing $required" }
+        }
+        function Read-PackageText([string]$Path) {
+            if (!$packageFiles.ContainsKey($Path)) { throw "Local package is missing $Path" }
+            $reader = [IO.StreamReader]::new($packageFiles[$Path].Open())
+            try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
+        }
+        $metadata = (Read-PackageText 'metadata.json') | ConvertFrom-Json
+        if ($metadata.package_id -cne 'ICompression' -or $metadata.display_name -cne 'ICompression' -or
+            $metadata.package_type -cne 'asset' -or !$metadata.ide_version -or $metadata.version -cne $ExpectedVersion) {
+            throw 'Local package metadata is inconsistent'
+        }
+        $expectedResources = @{}
+        $stageProject = Join-Path $StageDirectory 'project'
+        foreach ($item in (Get-ChildItem -LiteralPath $stageProject -Recurse -File)) {
+            $expectedResources[$item.FullName.Substring($stageProject.Length + 1).Replace('\', '/')] = $true
+        }
+        foreach ($name in @($expectedResources.Keys)) {
+            if (!$packageFiles.ContainsKey($name)) { throw "Local package is missing staged resource: $name" }
+        }
+        foreach ($name in @($packageFiles.Keys)) {
+            if ($name -in @('metadata.json', 'yymanifest.xml', 'ICompression.yyp', 'ICompression.resource_order')) { continue }
+            if (!$expectedResources.ContainsKey($name)) { throw "Local package contains an unexpected file: $name" }
+        }
+        # Every resource's parent must resolve to the package project; the
+        # mini-project has no folder structure for folders/... references.
+        # Parse tolerantly (GameMaker's trailing-comma dialect) so structurally
+        # corrupt resources are rejected too, not just wrong parent values.
+        foreach ($resourcePath in @('extensions/ICompression/ICompression.yy', 'extensions/ExtensionCore/ExtensionCore.yy',
+            'scripts/ICompression_API/ICompression_API.yy', 'scripts/ExtensionCore_api/ExtensionCore_api.yy',
+            'scripts/ExtensionCore_exports/ExtensionCore_exports.yy', 'notes/ExtensionCore_readme/ExtensionCore_readme.yy')) {
+            $resourceJson = $null
+            try {
+                $resourceJson = ([regex]::Replace((Read-PackageText $resourcePath), ',(\s*[}\]])', '$1')) | ConvertFrom-Json
+            } catch { throw "Local package resource is not valid GameMaker JSON: $resourcePath" }
+            if ($resourceJson.parent.name -cne 'ICompression' -or $resourceJson.parent.path -cne 'ICompression.yyp') {
+                throw "Packaged resource parent does not resolve to the package project: $resourcePath"
+            }
+        }
+        $manifestXml = [xml](Read-PackageText 'yymanifest.xml')
+        $manifestEntries = [ordered]@{}
+        foreach ($fileNode in @($manifestXml.files.file)) {
+            $manifestPath = [string]$fileNode.'#text'
+            $manifestMd5 = [string]$fileNode.md5
+            if ($manifestMd5 -cnotmatch '^[0-9A-F]{32}$') { throw "Invalid MD5 in yymanifest: $manifestPath" }
+            if ($manifestEntries.Contains($manifestPath)) { throw "Duplicate yymanifest entry: $manifestPath" }
+            $manifestEntries[$manifestPath] = $manifestMd5
+        }
+        if ($manifestEntries.Count -ne $packageFiles.Count - 1) { throw 'yymanifest does not cover every packaged file' }
+        foreach ($item in $manifestEntries.GetEnumerator()) {
+            $zipName = $item.Key.Replace('\', '/')
+            if (!$packageFiles.ContainsKey($zipName)) { throw "yymanifest entry is missing from the package: $($item.Key)" }
+            $stream = $packageFiles[$zipName].Open()
+            try { $actualMd5 = [Convert]::ToHexString([Security.Cryptography.MD5]::HashData($stream)) }
+            finally { $stream.Dispose() }
+            if ($actualMd5 -cne $item.Value) { throw "Local package MD5 mismatch: $($item.Key)" }
+        }
+        $miniProject = (Read-PackageText 'ICompression.yyp') | ConvertFrom-Json
+        if ($miniProject.MetaData.PackageVersion -cne $ExpectedVersion -or
+            $miniProject.MetaData.PackageID -cne 'ICompression' -or $miniProject.MetaData.PackageName -cne 'ICompression' -or
+            $miniProject.MetaData.PackagePublisher -cne 'Mionumbra' -or $miniProject.MetaData.PackageType -cne 'Asset') {
+            throw 'Local package project metadata is inconsistent'
+        }
+        if ((Read-PackageText 'ICompression.resource_order') -cnotmatch '"ResourceOrderSettings"') {
+            throw 'Local package resource_order is malformed'
+        }
+    } finally { $localPackage.Dispose() }
+}

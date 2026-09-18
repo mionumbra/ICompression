@@ -18,7 +18,7 @@ Supported stream filters are gzip, bzip2, zstd, LZ4, and xz. ZIP, 7z, and tar ar
 
 ## Installation
 
-The generated `ICompression-<version>.zip` is a versioned resource bundle, not a `.yymps` file. To install it, copy the extension and script resource directories into a GameMaker project and add the bundled resources to that project's `.yyp`, or use GameMaker's Local Package workflow to create/import a `.yymps` from the staged resources. A complete release contains:
+The recommended install is the generated `ICompression-<version>.yymps` local package: import it directly in the GameMaker IDE (Import Local Package). The `ICompression-<version>.zip` is the full release bundle for manual installation — it adds dependency license texts, `build-info.json` provenance, and SHA-256 checksums. To install manually, copy the extension and script resource directories into a GameMaker project and add the bundled resources to that project's `.yyp`, or use GameMaker's Local Package workflow to create/import a `.yymps` from the staged resources. A complete release contains:
 
 - `ICompression.dll`
 - `ICompression.ext`
@@ -153,7 +153,7 @@ pwsh -File "scripts/release.ps1" -OnlyPackage -BuildDirectory "out/release-build
 
 This still verifies the DLL receipt and runs VM tests; the build count remains unchanged. `-ResourceToolPath` may select an already installed official `ResourceTool.exe`; otherwise gm-cli starts the resource MCP. The staged project is temporary; a successful run advances the source `.yy` seed to the shipped version, also under `-OnlyPackage`, while the build counter state is untouched. Normal release generation can rewrite generated source files and cause a real rebuild; use `-OnlyPackage` when reusing an existing build is intended.
 
-The staged bundle and ZIP are written under `release/`; nothing is uploaded. The bundle includes dependency license texts, `build-info.json` with source revision, tool/compiler versions, the GameMaker runtime used, and test counts, plus SHA-256 checksums. A separate `.zip.sha256` checks the complete archive. After creation the archive is re-verified — sidecar hash, every manifest checksum against the archived bytes, the required-resource list, and version agreement — and a failed check fails the release. Timestamps and compiler output mean repeated builds are not promised to produce identical ZIP bytes.
+The staged bundle and ZIP are written under `release/`; nothing is uploaded. Alongside it the pipeline emits `ICompression-<version>.yymps`, a GameMaker Local Package with the same staged resources (the recommended install path), verified by the same post-archive validator. The bundle includes dependency license texts, `build-info.json` with source revision, tool/compiler versions, the GameMaker runtime used, and test counts, plus SHA-256 checksums. A separate `.zip.sha256` checks the complete archive. After creation the archive is re-verified — sidecar hash, every manifest checksum against the archived bytes, the required-resource list, and version agreement — and a failed check fails the release. Timestamps and compiler output mean repeated builds are not promised to produce identical ZIP bytes.
 
 Run isolated release preflight checks without compiling or running GameMaker:
 

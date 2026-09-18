@@ -267,6 +267,7 @@ if ($peOffset -lt 0 -or [long]$peOffset + 6 -gt $dllBytes.Length -or
     [BitConverter]::ToUInt16($dllBytes, $peOffset + 4) -ne 0x8664) { throw 'Release DLL is not Windows x64' }
 $stage = Assert-ChildPath (Join-Path $root "release\ICompression-$Version") (Join-Path $root 'release')
 $archive = "$stage.zip"
+$yymps = Assert-ChildPath (Join-Path $root "release\ICompression-$Version.yymps") (Join-Path $root 'release')
 # --runtime=vm chooses the runner type; omit any runtime-version override so
 # gm-cli uses the user's configured/default GameMaker runtime.
 $testLog = Join-Path $build 'gamemaker-tests.log'
@@ -309,7 +310,7 @@ if ($YycTests) {
 }
 
 Remove-ReleaseDirectory $stage (Join-Path $root 'release')
-foreach ($oldFile in @($archive, "${archive}.sha256")) {
+foreach ($oldFile in @($archive, "${archive}.sha256", $yymps)) {
     $safeFile = Assert-ChildPath $oldFile (Join-Path $root 'release')
     if (Test-Path -LiteralPath $safeFile) { Remove-Item -LiteralPath $safeFile -Force }
 }
@@ -437,6 +438,7 @@ $buildInfo = [ordered]@{
     configuration = $receipt.configuration
     platform = 'windows-x64'
     gamemaker_runtime_versions = $runtimeVersions
+    yymps = $true
     tests = [ordered]@{ total = [int]$summaries[-1].Groups[1].Value; passed = [int]$summaries[-1].Groups[2].Value; failed = 0 }
 }
 if ($yycSummaries) {
@@ -509,7 +511,136 @@ try {
         } finally { if ([IO.File]::Exists($counterTemporary)) { [IO.File]::Delete($counterTemporary) } }
     } finally { $counterLock.Dispose() }
 } catch { Write-Host "WARNING: the release cycle counter was not reset: $($_.Exception.Message)" }
+# Emit the GameMaker Local Package (.yymps) next to the bundle ZIP: a
+# self-contained mini project assembled from the staged resources, so the
+# ResourceTool-stamped .yy ships in it. Built before the validator so a broken
+# package fails the release through the same post-archive verification.
+$yympsDir = Assert-ChildPath (Join-Path $root ('out\release-yymps-' + [guid]::NewGuid().ToString('N'))) $root
+try {
+    $yympsResources = @(
+        'extensions\ICompression\ICompression.yy', 'extensions\ICompression\ICompression.ext',
+        'extensions\ICompression\ICompression.dll',
+        'extensions\ExtensionCore\ExtensionCore.yy',
+        'extensions\ExtensionCore\AndroidSource\Java\GMExtUtils.java',
+        'extensions\ExtensionCore\AndroidSource\Java\GMExtWire.java',
+        'scripts\ICompression_API\ICompression_API.yy', 'scripts\ICompression_API\ICompression_API.gml',
+        'scripts\ExtensionCore_api\ExtensionCore_api.yy', 'scripts\ExtensionCore_api\ExtensionCore_api.gml',
+        'scripts\ExtensionCore_exports\ExtensionCore_exports.yy', 'scripts\ExtensionCore_exports\ExtensionCore_exports.gml',
+        'notes\ExtensionCore_readme\ExtensionCore_readme.yy', 'notes\ExtensionCore_readme\ExtensionCore_readme.md'
+    )
+    if ($MacOsBinary) { $yympsResources += 'extensions\ICompression\libICompression.dylib' }
+    if ($LinuxBinary) { $yympsResources += 'extensions\ICompression\libICompression.so' }
+    # The mini-project has no folder structure: every resource's parent must
+    # point at the package project itself or ProjectTool refuses the load
+    # ("Cannot find folder path 'folders/...'"). Rewrite only that field.
+    $yympsParented = @(
+        'extensions\ICompression\ICompression.yy',
+        'extensions\ExtensionCore\ExtensionCore.yy',
+        'scripts\ICompression_API\ICompression_API.yy',
+        'scripts\ExtensionCore_api\ExtensionCore_api.yy',
+        'scripts\ExtensionCore_exports\ExtensionCore_exports.yy',
+        'notes\ExtensionCore_readme\ExtensionCore_readme.yy'
+    )
+    foreach ($relative in $yympsResources) {
+        $yympsSource = Join-Path $stage (Join-Path 'project' $relative)
+        if (!(Test-Path -LiteralPath $yympsSource -PathType Leaf)) { throw "Missing packaged resource: $relative" }
+        $yympsDestination = Assert-ChildPath (Join-Path $yympsDir $relative) $yympsDir
+        New-Item -ItemType Directory -Path (Split-Path -Parent $yympsDestination) -Force | Out-Null
+        Copy-Item -LiteralPath $yympsSource -Destination $yympsDestination
+        if ($yympsParented -contains $relative) {
+            $resourceText = [IO.File]::ReadAllText($yympsDestination)
+            $parentPattern = '"parent"\s*:\s*\{\s*"name"\s*:\s*"[^"]*"\s*,\s*"path"\s*:\s*"[^"]*"\s*,?\s*\}'
+            if ([regex]::Matches($resourceText, $parentPattern).Count -ne 1) {
+                throw "Expected exactly one parent object in packaged resource: $relative"
+            }
+            $resourceText = [regex]::Replace($resourceText, $parentPattern, '"parent":{"name":"ICompression","path":"ICompression.yyp"}')
+            [IO.File]::WriteAllText($yympsDestination, $resourceText, [Text.UTF8Encoding]::new($false))
+        }
+    }
+    $metadataJson = @'
+{
+  "package_id": "ICompression",
+  "display_name": "ICompression",
+  "version": "@VERSION@",
+  "package_type": "asset",
+  "ide_version": "2026.0.0.16"
+}
+'@
+    $miniProject = @'
+{
+  "$GMProject":"v1",
+  "%Name":"ICompression",
+  "AudioGroups":[
+    {"$GMAudioGroup":"v1","%Name":"audiogroup_default","exportDir":"","name":"audiogroup_default","resourceType":"GMAudioGroup","resourceVersion":"2.0","targets":-1}
+  ],
+  "configs":{
+    "children":[],
+    "name":"Default"
+  },
+  "defaultScriptType":1,
+  "Folders":[],
+  "ForcedPrefabProjectReferences":[],
+  "IncludedFiles":[],
+  "isEcma":false,
+  "LibraryEmitters":[],
+  "MetaData":{
+    "IDEVersion":"2026.0.0.16",
+    "PackageType":"Asset",
+    "PackageName":"ICompression",
+    "PackageID":"ICompression",
+    "PackagePublisher":"Mionumbra",
+    "PackageVersion":"@VERSION@"
+  },
+  "name":"ICompression",
+  "resources":[
+    {"id":{"name":"ICompression","path":"extensions/ICompression/ICompression.yy"}},
+    {"id":{"name":"ExtensionCore","path":"extensions/ExtensionCore/ExtensionCore.yy"}},
+    {"id":{"name":"ICompression_API","path":"scripts/ICompression_API/ICompression_API.yy"}},
+    {"id":{"name":"ExtensionCore_api","path":"scripts/ExtensionCore_api/ExtensionCore_api.yy"}},
+    {"id":{"name":"ExtensionCore_exports","path":"scripts/ExtensionCore_exports/ExtensionCore_exports.yy"}},
+    {"id":{"name":"ExtensionCore_readme","path":"notes/ExtensionCore_readme/ExtensionCore_readme.yy"}}
+  ],
+  "resourceType":"GMProject",
+  "resourceVersion":"2.0",
+  "RoomOrderNodes":[],
+  "templateType":null,
+  "TextureGroups":[
+    {"$GMTextureGroup":"","%Name":"Default","autocrop":true,"border":2,"compressFormat":"bz2","customOptions":"","directory":"","groupParent":null,"isScaled":true,"loadType":"default","mipsToGenerate":0,"name":"Default","resourceType":"GMTextureGroup","resourceVersion":"2.0","targets":-1}
+  ]
+}
+'@
+    $resourceOrder = @'
+{
+  "FolderOrderSettings":[],
+  "ResourceOrderSettings":[
+    {"name":"ICompression","order":0,"path":"extensions/ICompression/ICompression.yy"},
+    {"name":"ExtensionCore","order":1,"path":"extensions/ExtensionCore/ExtensionCore.yy"},
+    {"name":"ICompression_API","order":2,"path":"scripts/ICompression_API/ICompression_API.yy"},
+    {"name":"ExtensionCore_api","order":3,"path":"scripts/ExtensionCore_api/ExtensionCore_api.yy"},
+    {"name":"ExtensionCore_exports","order":4,"path":"scripts/ExtensionCore_exports/ExtensionCore_exports.yy"},
+    {"name":"ExtensionCore_readme","order":5,"path":"notes/ExtensionCore_readme/ExtensionCore_readme.yy"}
+  ]
+}
+'@
+    foreach ($generated in @(@('metadata.json', $metadataJson), @('ICompression.yyp', $miniProject), @('ICompression.resource_order', $resourceOrder))) {
+        $generatedText = $generated[1].Replace('@VERSION@', $Version).Replace("`n", "`r`n")
+        [IO.File]::WriteAllText((Join-Path $yympsDir $generated[0]), $generatedText, [Text.UTF8Encoding]::new($false))
+    }
+    # Root metadata files first (resource_order, .yyp, metadata.json), then the
+    # sorted resources — the official package's ordering convention.
+    $manifestLines = [System.Collections.Generic.List[string]]::new()
+    $manifestLines.Add('<?xml version="1.0" encoding="utf-8"?>')
+    $manifestLines.Add('<files>')
+    foreach ($relative in @('ICompression.resource_order', 'ICompression.yyp', 'metadata.json') + @($yympsResources | Sort-Object)) {
+        $md5 = (Get-FileHash -LiteralPath (Join-Path $yympsDir $relative) -Algorithm MD5).Hash
+        $manifestLines.Add("`t<file md5=`"$md5`">$relative</file>")
+    }
+    $manifestLines.Add('</files>')
+    [IO.File]::WriteAllText((Join-Path $yympsDir 'yymanifest.xml'), (($manifestLines -join "`r`n") + "`r`n"), [Text.UTF8Encoding]::new($true))
+    Compress-Archive -Path (Join-Path $yympsDir '*') -DestinationPath $yymps -CompressionLevel Optimal
+}
+finally { Remove-ReleaseDirectory $yympsDir $root }
 # Re-verify the finished archive before reporting success. A bad archive is
 # left in place for diagnosis; the non-zero exit is the failure signal.
-& (Join-Path $PSScriptRoot 'validate-package.ps1') -Archive $archive -ExpectedVersion $Version -StageDirectory $stage | Out-Null
+& (Join-Path $PSScriptRoot 'validate-package.ps1') -Archive $archive -ExpectedVersion $Version -StageDirectory $stage -Yymps $yymps | Out-Null
 $archiveHash

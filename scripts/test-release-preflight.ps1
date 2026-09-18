@@ -151,18 +151,22 @@ Import-Module Microsoft.PowerShell.Archive
 function Compress-Archive {
     [CmdletBinding()]
     param([string]$Path, [string]$DestinationPath, [string]$CompressionLevel)
-    # Capture the cycle count at archive time to pin the reset's ordering.
-    $global:ICReleaseTestState.cycleAtCompress = $null
-    if ($global:ICReleaseTestState.counterPath -and (Test-Path -LiteralPath $global:ICReleaseTestState.counterPath -PathType Leaf)) {
-        $global:ICReleaseTestState.cycleAtCompress = ([IO.File]::ReadAllText($global:ICReleaseTestState.counterPath) | ConvertFrom-Json).cycle_builds
+    # Capture the cycle count at bundle-archive time to pin the reset's ordering.
+    if ($DestinationPath -like '*.zip') {
+        $global:ICReleaseTestState.cycleAtCompress = $null
+        if ($global:ICReleaseTestState.counterPath -and (Test-Path -LiteralPath $global:ICReleaseTestState.counterPath -PathType Leaf)) {
+            $global:ICReleaseTestState.cycleAtCompress = ([IO.File]::ReadAllText($global:ICReleaseTestState.counterPath) | ConvertFrom-Json).cycle_builds
+        }
     }
     if ($global:ICReleaseTestState.tamperStagedFile) {
         # Flip one staged byte after SHA256SUMS.txt was written, so the archived
         # bytes no longer match the manifest the validator re-checks.
         $tamperTarget = Join-Path (Split-Path -Parent $Path) 'CHANGELOG.md'
-        $tamperBytes = [IO.File]::ReadAllBytes($tamperTarget)
-        $tamperBytes[0] = $tamperBytes[0] -bxor 0xFF
-        [IO.File]::WriteAllBytes($tamperTarget, $tamperBytes)
+        if (Test-Path -LiteralPath $tamperTarget -PathType Leaf) {
+            $tamperBytes = [IO.File]::ReadAllBytes($tamperTarget)
+            $tamperBytes[0] = $tamperBytes[0] -bxor 0xFF
+            [IO.File]::WriteAllBytes($tamperTarget, $tamperBytes)
+        }
     }
     Microsoft.PowerShell.Archive\Compress-Archive @PSBoundParameters
 }
@@ -197,7 +201,7 @@ function Set-FixtureArtifact([string]$Value) {
     } | ConvertTo-Json | Set-Content -LiteralPath ($global:ICReleaseTestState.mockDllPath + '.build.json') -Encoding utf8NoBOM
 }
 function Set-FixtureVersion([string]$Value) {
-    '{"extensionVersion":"' + $Value + '","files":[]}' |
+    '{"extensionVersion":"' + $Value + '","files":[],"parent":{"name":"ICompression","path":"folders/Extensions/ICompression.yy"}}' |
         Set-Content -LiteralPath $extensionPath -Encoding utf8NoBOM
 }
 $global:ICReleaseTestState.passed = 0
@@ -245,16 +249,21 @@ function Add-FixtureTree {
         (Join-Path $source 'project\scripts\ExtensionCore_exports'), (Join-Path $source 'project\notes\ExtensionCore_readme'),
         (Join-Path $source 'project\extensions\ExtensionCore\AndroidSource\Java'), (Join-Path $source 'third_party') -Force | Out-Null
     '{"resources":[]}' | Set-Content -LiteralPath $global:ICReleaseTestState.sourceProject
-    'api yy' | Set-Content -LiteralPath (Join-Path $source 'project\scripts\ICompression_API\ICompression_API.yy')
     'api gml' | Set-Content -LiteralPath (Join-Path $source 'project\scripts\ICompression_API\ICompression_API.gml')
-    'core ext yy' | Set-Content -LiteralPath (Join-Path $source 'project\extensions\ExtensionCore\ExtensionCore.yy')
+    '{"name":"ICompression_API","parent":{"name":"ICompression_API","path":"folders/Scripts.yy"}}' |
+        Set-Content -LiteralPath (Join-Path $source 'project\scripts\ICompression_API\ICompression_API.yy')
+    ('{' + "`n" + '  "name":"ExtensionCore",' + "`n" + '  "parent":{' + "`n" + '    "name":"ExtensionCore",' + "`n" + '    "path":"folders/Extensions.yy",' + "`n" + '  },' + "`n" + '}') |
+        Set-Content -LiteralPath (Join-Path $source 'project\extensions\ExtensionCore\ExtensionCore.yy')
     'core utils java' | Set-Content -LiteralPath (Join-Path $source 'project\extensions\ExtensionCore\AndroidSource\Java\GMExtUtils.java')
     'core wire java' | Set-Content -LiteralPath (Join-Path $source 'project\extensions\ExtensionCore\AndroidSource\Java\GMExtWire.java')
-    'core api yy' | Set-Content -LiteralPath (Join-Path $source 'project\scripts\ExtensionCore_api\ExtensionCore_api.yy')
+    '{"name":"ExtensionCore_api","parent":{"name":"ExtensionCore_api","path":"folders/Scripts.yy"}}' |
+        Set-Content -LiteralPath (Join-Path $source 'project\scripts\ExtensionCore_api\ExtensionCore_api.yy')
     'core api gml' | Set-Content -LiteralPath (Join-Path $source 'project\scripts\ExtensionCore_api\ExtensionCore_api.gml')
-    'core exports yy' | Set-Content -LiteralPath (Join-Path $source 'project\scripts\ExtensionCore_exports\ExtensionCore_exports.yy')
+    '{"name":"ExtensionCore_exports","parent":{"name":"ExtensionCore_exports","path":"folders/Scripts.yy"}}' |
+        Set-Content -LiteralPath (Join-Path $source 'project\scripts\ExtensionCore_exports\ExtensionCore_exports.yy')
     'core exports gml' | Set-Content -LiteralPath (Join-Path $source 'project\scripts\ExtensionCore_exports\ExtensionCore_exports.gml')
-    'core readme yy' | Set-Content -LiteralPath (Join-Path $source 'project\notes\ExtensionCore_readme\ExtensionCore_readme.yy')
+    '{"name":"ExtensionCore_readme","parent":{"name":"ExtensionCore_readme","path":"folders/Notes.yy"}}' |
+        Set-Content -LiteralPath (Join-Path $source 'project\notes\ExtensionCore_readme\ExtensionCore_readme.yy')
     'core readme md' | Set-Content -LiteralPath (Join-Path $source 'project\notes\ExtensionCore_readme\ExtensionCore_readme.md')
     'apache-2.0' | Set-Content -LiteralPath (Join-Path $source 'third_party\extension-core-LICENSE.txt')
     New-Item -ItemType Directory -Path (Join-Path $source 'project\.gmcache\license') -Force | Out-Null
@@ -571,7 +580,7 @@ try {
         $info.source_has_local_changes -isnot [bool] -or !$info.built_at_utc -or !$info.packaged_at_utc -or
         $info.only_package -ne $true -or $info.configuration -cne 'Release' -or $info.platform -cne 'windows-x64' -or
         $info.generator -cne 'Visual Studio 18 2026' -or !$info.tools.gm_cli -or !$info.tools.node -or
-        !$info.tools.git -or !$info.tools.powershell -or !$info.tools.cxx_compiler -or
+        !$info.tools.git -or !$info.tools.powershell -or !$info.tools.cxx_compiler -or $info.yymps -ne $true -or
         @($info.gamemaker_runtime_versions) -notcontains '2026.0.0.23' -or
         $info.tests.total -ne 12 -or $info.tests.passed -ne 12 -or $info.tests.failed -ne 0) {
         throw 'build-info.json fields are inconsistent'
@@ -591,11 +600,16 @@ try {
         throw 'Release did not reset the cycle counter after packaging, or rewrote other state'
     }
     Add-Pass 'Release resets the cycle counter only after the archive and sidecar exist'
-    $verified = & (Join-Path $fixtureScripts 'validate-package.ps1') -Archive $archivePath -ExpectedVersion '1.0.3.8' -StageDirectory $stageDir
+    $verified = & (Join-Path $fixtureScripts 'validate-package.ps1') -Archive $archivePath -ExpectedVersion '1.0.3.8' -StageDirectory $stageDir -Yymps $yympsPath
     if ($verified.Version -cne '1.0.3.8' -or $verified.Files -ne 30 -or $verified.CheckedFileHashes -ne 29 -or $verified.Tests -cne '12/12') {
         throw 'Package validator reported unexpected results'
     }
     Add-Pass 'Package validator accepts the freshly built archive'
+    $yympsPath = Join-Path $releaseParent 'ICompression-1.0.3.8.yymps'
+    if (!(Test-Path -LiteralPath $yympsPath -PathType Leaf)) { throw 'Local package was not emitted next to the archive' }
+    $verifiedPackage = & (Join-Path $fixtureScripts 'validate-package.ps1') -Archive $archivePath -ExpectedVersion '1.0.3.8' -StageDirectory $stageDir -Yymps $yympsPath
+    if ($verifiedPackage.Files -ne 30) { throw 'Local package failed validation' }
+    Add-Pass 'Local package (.yymps) is emitted and passes the package validator'
 
     Set-FixtureCycle 7
     Reset-SecondHalf
@@ -704,7 +718,7 @@ try {
     }
     Add-Pass 'YYC run receives the native runtime and the toolchain options'
     $info = Get-Content -Raw -LiteralPath (Join-Path $stageDir 'build-info.json') | ConvertFrom-Json
-    $verified = & (Join-Path $fixtureScripts 'validate-package.ps1') -Archive $archivePath -ExpectedVersion '1.0.3.8' -StageDirectory $stageDir
+    $verified = & (Join-Path $fixtureScripts 'validate-package.ps1') -Archive $archivePath -ExpectedVersion '1.0.3.8' -StageDirectory $stageDir -Yymps $yympsPath
     if ($info.tests.total -ne 12 -or $info.tests.failed -ne 0 -or $verified.Tests -cne '12/12' -or
         $null -eq $info.PSObject.Properties['yyc_tests'] -or
         $info.yyc_tests.total -ne 12 -or $info.yyc_tests.passed -ne 12 -or $info.yyc_tests.failed -ne 0) {
@@ -753,7 +767,7 @@ try {
         throw "macOS bundle file set mismatch: $(Compare-Object $macExpected $macActual | Out-String)"
     }
     $info = Get-Content -Raw -LiteralPath (Join-Path $stageDir 'build-info.json') | ConvertFrom-Json
-    $verified = & (Join-Path $fixtureScripts 'validate-package.ps1') -Archive $archivePath -ExpectedVersion '1.0.3.8' -StageDirectory $stageDir
+    $verified = & (Join-Path $fixtureScripts 'validate-package.ps1') -Archive $archivePath -ExpectedVersion '1.0.3.8' -StageDirectory $stageDir -Yymps $yympsPath
     if ($null -eq $info.PSObject.Properties['macos_binary'] -or
         $info.macos_binary.sha256 -cne (Get-FileHash -LiteralPath $macOsFixture -Algorithm SHA256).Hash -or
         $verified.Files -ne 31 -or $verified.CheckedFileHashes -ne 30) {
@@ -777,7 +791,7 @@ try {
         throw "Linux bundle file set mismatch: $(Compare-Object $linuxExpected $linuxActual | Out-String)"
     }
     $info = Get-Content -Raw -LiteralPath (Join-Path $stageDir 'build-info.json') | ConvertFrom-Json
-    $verified = & (Join-Path $fixtureScripts 'validate-package.ps1') -Archive $archivePath -ExpectedVersion '1.0.3.8' -StageDirectory $stageDir
+    $verified = & (Join-Path $fixtureScripts 'validate-package.ps1') -Archive $archivePath -ExpectedVersion '1.0.3.8' -StageDirectory $stageDir -Yymps $yympsPath
     if ($null -eq $info.PSObject.Properties['linux_binary'] -or
         $info.linux_binary.sha256 -cne (Get-FileHash -LiteralPath $linuxFixture -Algorithm SHA256).Hash -or
         $null -ne $info.PSObject.Properties['macos_binary'] -or
@@ -796,7 +810,7 @@ try {
         throw "Combined bundle file set mismatch: $(Compare-Object $bothExpected $bothActual | Out-String)"
     }
     $info = Get-Content -Raw -LiteralPath (Join-Path $stageDir 'build-info.json') | ConvertFrom-Json
-    $verified = & (Join-Path $fixtureScripts 'validate-package.ps1') -Archive $archivePath -ExpectedVersion '1.0.3.8' -StageDirectory $stageDir
+    $verified = & (Join-Path $fixtureScripts 'validate-package.ps1') -Archive $archivePath -ExpectedVersion '1.0.3.8' -StageDirectory $stageDir -Yymps $yympsPath
     if ($null -eq $info.PSObject.Properties['linux_binary'] -or $null -eq $info.PSObject.Properties['macos_binary'] -or
         $info.linux_binary.sha256 -cne (Get-FileHash -LiteralPath $linuxFixture -Algorithm SHA256).Hash -or
         $info.macos_binary.sha256 -cne (Get-FileHash -LiteralPath $macOsFixture -Algorithm SHA256).Hash -or
@@ -804,6 +818,52 @@ try {
         throw 'Linux and macOS binaries were not staged, recorded, and validated'
     }
     Add-Pass 'Linux and macOS binaries stage together and both pass the validator'
+
+    # Local package negative cases run the real validator against doctored packages.
+    function Assert-YympsRejected([string]$Name, [scriptblock]$Doctor, [string]$Expected) {
+        $work = Join-Path $fixture ('yymps-work-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $work -Force | Out-Null
+        Expand-Archive -LiteralPath $yympsPath -DestinationPath $work
+        & $Doctor $work
+        $doctored = Join-Path $fixture 'doctored.yymps'
+        if (Test-Path -LiteralPath $doctored) { Remove-Item -LiteralPath $doctored -Force }
+        Compress-Archive -Path (Join-Path $work '*') -DestinationPath $doctored
+        $failure = $null
+        try { & (Join-Path $fixtureScripts 'validate-package.ps1') -Archive $archivePath -ExpectedVersion '1.0.3.8' -StageDirectory $stageDir -Yymps $doctored | Out-Null }
+        catch { $failure = $_.Exception.Message }
+        Remove-Item -LiteralPath $work -Recurse -Force
+        Remove-Item -LiteralPath $doctored -Force
+        if (!$failure -or $failure -notlike "*$Expected*") { throw "${Name}: expected '$Expected', received '$failure'" }
+        Add-Pass $Name
+    }
+    Assert-YympsRejected 'Validator rejects a tampered package byte' {
+        param($dir)
+        $target = Join-Path $dir 'scripts\ICompression_API\ICompression_API.gml'
+        $bytes = [IO.File]::ReadAllBytes($target)
+        $bytes[0] = $bytes[0] -bxor 0xFF
+        [IO.File]::WriteAllBytes($target, $bytes)
+    } 'MD5 mismatch'
+    Assert-YympsRejected 'Validator rejects a missing package resource' {
+        param($dir)
+        Remove-Item -LiteralPath (Join-Path $dir 'scripts\ICompression_API\ICompression_API.yy') -Force
+    } 'missing staged resource'
+    Assert-YympsRejected 'Validator rejects a mismatched package version' {
+        param($dir)
+        $metadataPath = Join-Path $dir 'metadata.json'
+        [IO.File]::WriteAllText($metadataPath, ([IO.File]::ReadAllText($metadataPath) -replace '"1\.0\.3\.8"', '"9.9.9.9"'), [Text.UTF8Encoding]::new($false))
+    } 'metadata is inconsistent'
+    Assert-YympsRejected 'Validator rejects a folder-bound resource parent' {
+        param($dir)
+        $target = Join-Path $dir 'scripts\ICompression_API\ICompression_API.yy'
+        $bound = [IO.File]::ReadAllText($target) -replace '"parent":\{"name":"ICompression","path":"ICompression\.yyp"\}', '"parent":{"name":"ICompression_API","path":"folders/Scripts.yy"}'
+        [IO.File]::WriteAllText($target, $bound, [Text.UTF8Encoding]::new($false))
+    } 'parent does not resolve'
+    Assert-YympsRejected 'Validator rejects malformed resource JSON' {
+        param($dir)
+        $target = Join-Path $dir 'scripts\ICompression_API\ICompression_API.yy'
+        $wrapped = [IO.File]::ReadAllText($target) -replace '"parent":\{', '{"parent":{'
+        [IO.File]::WriteAllText($target, $wrapped, [Text.UTF8Encoding]::new($false))
+    } 'not valid GameMaker JSON'
     Write-Output "Release preflight checks: $($global:ICReleaseTestState.passed) passed"
 }
 finally {
