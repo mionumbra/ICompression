@@ -1,5 +1,8 @@
 # ICompression
 
+[![CI](https://github.com/mionumbra/ICompression/actions/workflows/ci.yml/badge.svg)](https://github.com/mionumbra/ICompression/actions/workflows/ci.yml)
+[![GitHub release (latest prerelease)](https://img.shields.io/github/v/release/mionumbra/ICompression?include_prereleases)](https://github.com/mionumbra/ICompression/releases)
+
 ICompression is a native compression, decompression, and archive extension for GameMaker.
 
 ## Support
