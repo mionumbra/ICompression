@@ -21,11 +21,20 @@ jobs:
         shell: pwsh
         run: scripts/test-release-preflight.ps1
 
-      # The counter suite's generator is a script parameter; hosted runners
-      # have Visual Studio 2022, so select it explicitly (default is VS2026).
+      # The runner image tracks VS versions; resolve whatever is installed
+      # instead of hardcoding a generator.
+      - name: Resolve Visual Studio generator
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -property installationVersion
+          $gen = if ($vs -like '18.*') { 'Visual Studio 18 2026' } elseif ($vs -like '17.*') { 'Visual Studio 17 2022' } else { throw "Unsupported Visual Studio: $vs" }
+          "CI_VS_GENERATOR=$gen" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # The counter suite's generator is a script parameter (default VS2026).
       - name: Build counter checks (real CMake/MSVC builds)
         shell: pwsh
-        run: scripts/test-build-counter.ps1 -Generator 'Visual Studio 17 2022'
+        run: scripts/test-build-counter.ps1 -Generator $env:CI_VS_GENERATOR
 
   build-and-vm-tests:
     needs: script-tests
@@ -64,6 +73,14 @@ jobs:
         shell: pwsh
         run: extgen --config config.json
 
+      - name: Resolve Visual Studio generator
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -property installationVersion
+          $gen = if ($vs -like '18.*') { 'Visual Studio 18 2026' } elseif ($vs -like '17.*') { 'Visual Studio 17 2022' } else { throw "Unsupported Visual Studio: $vs" }
+          "CI_VS_GENERATOR=$gen" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       # _deps holds the FetchContent downloads of the third-party sources.
       - name: Cache CMake dependencies
         uses: actions/cache@v4
@@ -72,9 +89,9 @@ jobs:
           key: cmake-deps-${{ runner.os }}-${{ hashFiles('third_party/CMakeLists.txt') }}
           restore-keys: cmake-deps-${{ runner.os }}-
 
-      - name: Configure (VS2022, x64, dynamic CRT)
+      - name: Configure (x64, dynamic CRT)
         shell: pwsh
-        run: cmake -S . -B out/ci-build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL "-DEXT_OUTPUT_DIR=$PWD/project/extensions/ICompression"
+        run: cmake -S . -B out/ci-build -G "$env:CI_VS_GENERATOR" -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL "-DEXT_OUTPUT_DIR=$PWD/project/extensions/ICompression"
 
       # Fresh state: the build counter bootstraps from the checked-in .yy
       # fourth field, so the first CI build gets the seed plus one.
