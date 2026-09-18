@@ -56,6 +56,7 @@ jobs:
         if: steps.extgen-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Path out -Force | Out-Null
           $zip = 'out/extgen.zip'
           Invoke-WebRequest -Uri 'https://github.com/YoYoGames/GM-ExtensionGenerator/releases/download/v1.1.0/ExtensionGenerator-win-x64.zip' -OutFile $zip
           Expand-Archive -LiteralPath $zip -DestinationPath 'out/ci-extgen'
