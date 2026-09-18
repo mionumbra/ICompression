@@ -241,13 +241,12 @@ jobs:
 
       # Absolute paths only: relative paths make the runner fail to find the
       # game file. Gating mirrors the Windows job / release.ps1 exactly.
-      # --target=macos is the assumed gm-cli target name; correct it if the
-      # first run reports it as unknown.
+      # gm-cli's macOS target is `mac` (not `macos`).
       - name: Run GameMaker VM test suite
         shell: pwsh
         run: |
           $log = "$PWD/out/build/macos-release/gamemaker-tests.log"
-          & gm-cli run "$PWD/project/ICompression.yyp" --target=macos --runtime=vm "--cache-dir=$PWD/project/.gmcache" 2>&1 | Tee-Object -FilePath $log
+          & gm-cli run "$PWD/project/ICompression.yyp" --target=mac --runtime=vm "--cache-dir=$PWD/project/.gmcache" 2>&1 | Tee-Object -FilePath $log
           if ($LASTEXITCODE -ne 0) { throw "GameMaker VM tests failed (exit $LASTEXITCODE); see $log" }
           $output = Get-Content -Raw -LiteralPath $log
           $summaries = [regex]::Matches($output, 'Tests:\s*(\d+) total,\s*(\d+) passed,\s*(\d+) failed')
