@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.12.3 — Pre-release (2026-09-18)
+
+- Add macOS support: universal arm64+x86_64 `libICompression.dylib`, ad-hoc signed, shipped in the same release bundle.
+- Port the native code for Apple platforms (`_WIN32` guards, portable file/temp/logging paths); PE version stamping stays Windows-only.
+- Wire the extension for Windows+macOS (dylib proxy entry, target masks 66).
+- Replace the generated GMExtCore runtime script with the official `gamemaker.extension_core` package (ExtensionCore 1.5.0, Apache 2.0); the bundle ships its resources and license.
+- Validate macOS in CI with a native C-ABI smoke test driving the real wire protocol; the full GML suite requires a windowed Mac GUI and stays off CI.
+- Restore the source version seed via ResourceTool after the IDE reset `extensionVersion` to 0.0.1.
+
 ## 1.0.11.1 — Pre-release (2026-09-18)
 
 - Add GitHub Actions CI: one job runs the release preflight (82 checks) and build-counter suite (16 real builds); a second job builds the extension from a pinned extgen source build and runs the full VM test suite with an automatically provisioned guest license.
