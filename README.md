@@ -5,7 +5,7 @@ ICompression is a native compression, decompression, and archive extension for G
 ## Support
 
 - Platform: Windows x64
-- Platform: macOS arm64 (universal binary with x86_64); the `libICompression.dylib` ships in the same release bundle
+- Platform: macOS arm64 (universal binary with x86_64); the `libICompression.dylib` ships in the same release bundle. The dylib is validated by a native C-ABI smoke test in CI; run the GML suite on a real Mac for full coverage
 - GameMaker: tested with IDE 2026.0.0.16 and Runtime 2026.0.0.23
 - Runner: Windows VM and YYC tested. The release pipeline's YYC test pass is opt-in (`-YycTests` with `-YycVsDevCmd`) because it needs a configured GameMaker C++ toolchain. `-YycVsDevCmd` must name the `VsDevCmd.bat` file itself (e.g. `<VS>/Common7/Tools/VsDevCmd.bat`), not the Visual Studio root — otherwise the runtime reports that no Visual Studio location is set. Fresh unsigned YYC binaries can be quarantined by heuristic antivirus; allowlist the build output if the runner dies with an access-denied error starting the game.
 - Functional version: 1.0.4; CMake assigns the fourth field on each successful DLL build (see Building below).
@@ -173,7 +173,7 @@ gm-cli run "project/ICompression.yyp" --target=windows --runtime=vm
 
 ## CI
 
-GitHub Actions (`.github/workflows/ci.yml`) runs two jobs on pushes to `main` and on pull requests. `script-tests` executes the release preflight checks and the real-build counter suite with the Visual Studio 2022 generator. `build-and-vm-tests` then builds extgen `v1.d8c68bd` from its pinned source commit, generates the CMake tree, compiles the Release DLL, and runs the complete GameMaker VM suite with the same summary gating as the release script; the extgen build, CMake dependency downloads, and GameMaker runtime are cached between runs. The release script itself is not used in CI, and YYC testing stays local via `-YycTests` — fresh unsigned YYC binaries can trip heuristic antivirus on hosted runners.
+GitHub Actions (`.github/workflows/ci.yml`) runs three jobs on pushes to `main` and on pull requests. `script-tests` executes the release preflight checks and the real-build counter suite with the Visual Studio generator resolved from the runner image. `build-and-vm-tests` builds the Release DLL on Windows with the pinned extgen binary release (tag `v1.1.0`, reports `extgen v1.d8c68bd`) and runs the complete GameMaker VM suite with the same summary gating as the release script, using an automatically provisioned guest license. `build-and-test-macos` builds the universal arm64+x86_64 `libICompression.dylib` on macOS, ad-hoc signs it, uploads it as an artifact, and validates it with a native smoke test (`scripts/native-smoke.c`) that drives the exported C ABI; the full GML suite cannot run on headless macOS runners because the GameMaker runner needs a windowed GUI session, so runtime testing on macOS requires a real Mac. The release script itself is not used in CI, and YYC testing stays local via `-YycTests` — fresh unsigned YYC binaries can trip heuristic antivirus on hosted runners.
 
 ## Source Ownership
 
