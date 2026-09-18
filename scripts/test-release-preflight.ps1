@@ -448,7 +448,7 @@ try {
     # copy's $root is $source, so nothing here can touch the real repository.
     Add-FixtureTree
     $releaseParent = Join-Path $source 'release'
-    $stageName = 'ICompression-1.0.3.8-windows-x64'
+    $stageName = 'ICompression-1.0.3.8'
     $stageDir = Join-Path $releaseParent $stageName
     $archivePath = "$stageDir.zip"
     $passingLog = "Preparing runtime-2026.0.0.23`nTests: 12 total, 12 passed, 0 failed`nAll suites passed"

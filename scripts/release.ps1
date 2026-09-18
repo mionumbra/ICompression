@@ -265,7 +265,7 @@ $peOffset = [BitConverter]::ToInt32($dllBytes, 0x3c)
 if ($peOffset -lt 0 -or [long]$peOffset + 6 -gt $dllBytes.Length -or
     [BitConverter]::ToUInt32($dllBytes, $peOffset) -ne 0x4550 -or
     [BitConverter]::ToUInt16($dllBytes, $peOffset + 4) -ne 0x8664) { throw 'Release DLL is not Windows x64' }
-$stage = Assert-ChildPath (Join-Path $root "release\ICompression-$Version-windows-x64") (Join-Path $root 'release')
+$stage = Assert-ChildPath (Join-Path $root "release\ICompression-$Version") (Join-Path $root 'release')
 $archive = "$stage.zip"
 # --runtime=vm chooses the runner type; omit any runtime-version override so
 # gm-cli uses the user's configured/default GameMaker runtime.

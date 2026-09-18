@@ -15,7 +15,7 @@ Supported stream filters are gzip, bzip2, zstd, LZ4, and xz. ZIP, 7z, and tar ar
 
 ## Installation
 
-The generated ZIP is a versioned resource bundle, not a `.yymps` file. To install it, copy the extension and script resource directories into a GameMaker project and add the bundled resources to that project's `.yyp`, or use GameMaker's Local Package workflow to create/import a `.yymps` from the staged resources. A complete release contains:
+The generated `ICompression-<version>.zip` is a versioned resource bundle, not a `.yymps` file. To install it, copy the extension and script resource directories into a GameMaker project and add the bundled resources to that project's `.yyp`, or use GameMaker's Local Package workflow to create/import a `.yymps` from the staged resources. A complete release contains:
 
 - `ICompression.dll`
 - `ICompression.ext`
