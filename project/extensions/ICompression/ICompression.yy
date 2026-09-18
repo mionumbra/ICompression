@@ -11,16 +11,16 @@
   "androidsourcedir": "",
   "author": "Mionumbra",
   "classname": "",
-  "copyToTargets": 64,
+  "copyToTargets": 66,
   "description": "Advanced compression/decompression library",
   "exportToGame": true,
-  "extensionVersion": "1.0.11.1",
+  "extensionVersion": "0.0.1",
   "files": [
     {
       "$GMExtensionFile": "v1",
       "%Name": "",
       "constants": [],
-      "copyToTargets": -1,
+      "copyToTargets": 66,
       "filename": "ICompression.ext",
       "final": "ic_shutdown",
       "functions": [
@@ -505,6 +505,14 @@
           "resourceType": "GMProxyFile",
           "resourceVersion": "2.0",
           "TargetMask": 6
+        },
+        {
+          "$GMProxyFile": "",
+          "%Name": "libICompression.dylib",
+          "name": "libICompression.dylib",
+          "resourceType": "GMProxyFile",
+          "resourceVersion": "2.0",
+          "TargetMask": 1
         }
       ],
       "resourceType": "GMExtensionFile",
@@ -546,7 +554,7 @@
   "resourceType": "GMExtension",
   "resourceVersion": "2.0",
   "sourcedir": "",
-  "supportedTargets": 64,
+  "supportedTargets": 66,
   "tvosclassname": "",
   "tvosCocoaPodDependencies": "",
   "tvosCocoaPods": "",

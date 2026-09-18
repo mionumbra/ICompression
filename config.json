@@ -16,10 +16,6 @@
       "extensionFileName": "ICompression.ext",
       "patchFrameworks": true
     },
-    "runtime": {
-      "enabled": true,
-      "outputFile": "./project/scripts/GMExtCore/GMExtCore.gml"
-    },
     "injectors": {
       "enabled": true,
       "outputFolder": "./project/extensions/ICompression/injectors"

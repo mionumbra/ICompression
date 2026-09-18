@@ -1,9 +1,9 @@
 {
   "$GMScript":"v1",
-  "%Name":"GMExtCore",
+  "%Name":"ExtensionCore_exports",
   "isCompatibility":false,
   "isDnD":false,
-  "name":"GMExtCore",
+  "name":"ExtensionCore_exports",
   "parent":{
     "name":"Extensions",
     "path":"folders/Extensions.yy",
