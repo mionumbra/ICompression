@@ -11,12 +11,12 @@
   "androidsourcedir":"",
   "author":"Mionumbra",
   "classname":"",
-  "copyToTargets":66,
+  "copyToTargets":194,
   "description":"Advanced compression/decompression library",
   "exportToGame":true,
-  "extensionVersion":"1.0.12.3",
+  "extensionVersion":"1.0.13.1",
   "files":[
-    {"$GMExtensionFile":"v1","%Name":"","constants":[],"copyToTargets":66,"filename":"ICompression.ext","final":"ic_shutdown","functions":[
+    {"$GMExtensionFile":"v1","%Name":"","constants":[],"copyToTargets":194,"filename":"ICompression.ext","final":"ic_shutdown","functions":[
         {"$GMExtensionFunction":"","%Name":"__ic_compress","argCount":2,"args":[1,2,],"documentation":"@param {Pointer} _arg_buffer\r\n@param {Real} _arg_buffer_length\r\n@returns {String}","externalName":"__EXT_NATIVE__ic_compress","help":"","hidden":true,"kind":4,"name":"__ic_compress","resourceType":"GMExtensionFunction","resourceVersion":"2.0","returnType":1,},
         {"$GMExtensionFunction":"","%Name":"__ic_decompress","argCount":2,"args":[1,2,],"documentation":"@param {Pointer} _arg_buffer\r\n@param {Real} _arg_buffer_length\r\n@returns {String}","externalName":"__EXT_NATIVE__ic_decompress","help":"","hidden":true,"kind":4,"name":"__ic_decompress","resourceType":"GMExtensionFunction","resourceVersion":"2.0","returnType":1,},
         {"$GMExtensionFunction":"","%Name":"__ic_compress_file","argCount":2,"args":[1,2,],"documentation":"@param {Pointer} _arg_buffer\r\n@param {Real} _arg_buffer_length\r\n@returns {Real}","externalName":"__EXT_NATIVE__ic_compress_file","help":"","hidden":true,"kind":4,"name":"__ic_compress_file","resourceType":"GMExtensionFunction","resourceVersion":"2.0","returnType":2,},
@@ -45,6 +45,7 @@
       ],"init":"","kind":4,"name":"","origname":"","ProxyFiles":[
         {"$GMProxyFile":"","%Name":"ICompression.dll","name":"ICompression.dll","resourceType":"GMProxyFile","resourceVersion":"2.0","TargetMask":6,},
         {"$GMProxyFile":"","%Name":"libICompression.dylib","name":"libICompression.dylib","resourceType":"GMProxyFile","resourceVersion":"2.0","TargetMask":1,},
+        {"$GMProxyFile":"","%Name":"libICompression.so","name":"libICompression.so","resourceType":"GMProxyFile","resourceVersion":"2.0","TargetMask":7,},
       ],"resourceType":"GMExtensionFile","resourceVersion":"2.0","uncompress":false,"usesRunnerInterface":false,},
   ],
   "gradleinject":"",
@@ -80,7 +81,7 @@
   "resourceType":"GMExtension",
   "resourceVersion":"2.0",
   "sourcedir":"",
-  "supportedTargets":66,
+  "supportedTargets":194,
   "tvosclassname":"",
   "tvosCocoaPodDependencies":"",
   "tvosCocoaPods":"",

@@ -6,9 +6,10 @@ ICompression is a native compression, decompression, and archive extension for G
 
 - Platform: Windows x64
 - Platform: macOS arm64 (universal binary with x86_64); the `libICompression.dylib` ships in the same release bundle. The dylib is validated by a native C-ABI smoke test in CI; run the GML suite on a real Mac for full coverage
+- Platform: Linux x64; the `libICompression.so` ships in the same release bundle and is validated by the same native smoke test in CI
 - GameMaker: tested with IDE 2026.0.0.16 and Runtime 2026.0.0.23
 - Runner: Windows VM and YYC tested. The release pipeline's YYC test pass is opt-in (`-YycTests` with `-YycVsDevCmd`) because it needs a configured GameMaker C++ toolchain. `-YycVsDevCmd` must name the `VsDevCmd.bat` file itself (e.g. `<VS>/Common7/Tools/VsDevCmd.bat`), not the Visual Studio root — otherwise the runtime reports that no Visual Studio location is set. Fresh unsigned YYC binaries can be quarantined by heuristic antivirus; allowlist the build output if the runner dies with an access-denied error starting the game.
-- Functional version: 1.0.4; CMake assigns the fourth field on each successful DLL build (see Building below).
+- Functional version: 1.0.13; CMake assigns the fourth field on each successful DLL build (see Building below).
 
 Supported stream filters are gzip, bzip2, zstd, LZ4, and xz. ZIP, 7z, and tar archives can be created and read. RAR is detection/read-only through libarchive; RAR creation is not supported. Archive reading (list, extract, and single-entry APIs) accepts every format libarchive reads — beyond ZIP, 7z, tar, and RAR this includes cpio, ISO 9660, CAB, LHA, XAR, mtree, and WARC (libarchive 3.8.8). Creation is ZIP/7z/tar only, and all extraction safety checks apply regardless of format. `ic_detect` identifies the primary formats; other readable formats report `Raw`.
 

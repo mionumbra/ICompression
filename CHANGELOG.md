@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.13.1 — Pre-release (2026-09-18)
+
+- Add Linux support: x86-64 `libICompression.so` ships in the bundle, built and validated in CI with the native smoke test.
+- Wire the extension for Windows+macOS+Linux (proxy entries, target masks 194).
+- Add `-LinuxBinary` packaging with ELF header validation; release preflight reaches 94 checks.
+
 ## 1.0.12.3 — Pre-release (2026-09-18)
 
 - Add macOS support: universal arm64+x86_64 `libICompression.dylib`, ad-hoc signed, shipped in the same release bundle.
